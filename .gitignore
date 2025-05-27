@@ -47,3 +47,6 @@ ckpts/
 
 # Ignore large files
 datasets/*.csv
+ATTEMPT1/
+__pycache__/
+datasets/fold_emb/

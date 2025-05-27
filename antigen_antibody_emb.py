@@ -1,3 +1,4 @@
+import hashlib
 import esm
 import os
 import lmdb
@@ -95,7 +96,8 @@ class antibody_antigen_dataset(nn.Module):
     def __getitem__(self, index):
         data = self.data.iloc[index]
         label = torch.tensor(data['ANT_Binding'])
-        antigen_cache_filename = str(self.data.iloc[index]['Antigen Sequence']) + '.pt'
+        antigen_seq = str(self.data.iloc[index]['Antigen Sequence'])
+        antigen_cache_filename = hashlib.md5(antigen_seq.encode()).hexdigest() + '.pt'
         antigen_cache_path = os.path.join(ANTIGEN_ESM_CACHE_DIR, antigen_cache_filename) # Use defined cache dir
 
         if not os.path.exists(antigen_cache_path): # Check using the constructed path
@@ -174,8 +176,8 @@ class antibody_antigen_dataset(nn.Module):
 
         antigen = data['Antigen Sequence']
         antigen = torch.tensor([AminoAcid_Vocab[aa] for aa in antigen])
-        antigen = self.universal_padding(seq=antigen, maxlen=self.antigen_config.max_position_embeddings)
-
+        antigen = self.universal_padding(sequence=antigen, max_length=self.antigen_config.max_position_embeddings)
+        
         antigen_structure = antigen_structure[:1024, :]
         # print(antigen_structure.shape)
         return [antibody,at_type,antibody_structure],[antigen,antigen_structure],label

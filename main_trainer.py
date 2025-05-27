@@ -101,8 +101,7 @@ class Trainer():
                     (torch.cat([temp.view(1, -1) for temp in Y_hat], dim=0)).long().cpu().numpy(),
                     torch.tensor(Y).cpu()
                 )
-                train_loss = train_loss / num_train
-                train_loss = np.exp(train_loss)
+                train_loss = train_loss / len(self.train_dataloader)
 
                 self.logger.log([epoch+1, train_loss, train_acc, train_precision,train_f1,recall])
 
@@ -130,7 +129,7 @@ if __name__ == "__main__":
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--batch_size', type=int, default=200)
     parser.add_argument('--latent_dim', type=int, default=36)
-    parser.add_argument('--epochs', type=int, default=500)
+    parser.add_argument('--epochs', type=int, default=100)
     parser.add_argument('--lr', type=float, default=6e-5, help='learning rate')
     parser.add_argument('--model_name', type=str, default='AntiBinder')
     parser.add_argument('--cuda', type=bool, default=True)
@@ -220,9 +219,15 @@ if __name__ == "__main__":
             test=False, 
             rate1=1
         )
+    def custom_collate(batch):
+        antibody_sets, antigen_sets, labels = zip(*batch)
+        antibody_sets = [torch.stack(x) for x in zip(*antibody_sets)]
+        antigen_sets = [torch.stack(x) for x in zip(*antigen_sets)]
+        labels = torch.stack(labels)
+        return antibody_sets, antigen_sets, labels
 
-    train_dataloader = DataLoader(train_dataset, shuffle=False, batch_size=args.batch_size)
-    
+    train_dataloader = DataLoader(train_dataset, shuffle=False, batch_size=args.batch_size, collate_fn=custom_collate)
+
     # Create logger with path using the directory we ensured exists
     log_file = os.path.join(
         args.log_dir, 
