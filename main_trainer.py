@@ -127,9 +127,9 @@ class Trainer():
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--seed', type=int, default=42)
-    parser.add_argument('--batch_size', type=int, default=200)
+    parser.add_argument('--batch_size', type=int, default=128)
     parser.add_argument('--latent_dim', type=int, default=36)
-    parser.add_argument('--epochs', type=int, default=100)
+    parser.add_argument('--epochs', type=int, default=40)
     parser.add_argument('--lr', type=float, default=6e-5, help='learning rate')
     parser.add_argument('--model_name', type=str, default='AntiBinder')
     parser.add_argument('--cuda', type=bool, default=True)

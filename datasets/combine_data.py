@@ -37,6 +37,7 @@ else:
         if not df_list:
                 print(f"No valid data found in CSV files in {data_dir}")
         else:
+            
             # Concatenate all the dataframes in the list
             combined_df = pd.concat(df_list, ignore_index=True)
 
@@ -46,11 +47,20 @@ else:
             final_rows = len(combined_df)
             print(f"Removed {initial_rows - final_rows} duplicate rows.")
 
+            # Split into train and test (e.g., 80% train, 20% test)
+            train_df = combined_df.sample(frac=0.8, random_state=42)
+            test_df = combined_df.drop(train_df.index)
+
+            # Save the splits
+            train_file = os.path.join(script_dir, 'combined_training_data.csv')
+            test_file = os.path.join(script_dir, 'test_data.csv')
+            train_df.to_csv(train_file, index=False)
+            test_df.to_csv(test_file, index=False)
+            print(f"Train data saved to {train_file}")
+            print(f"Test data saved to {test_file}")
 
             # Ensure the output directory exists
             os.makedirs(os.path.dirname(output_file), exist_ok=True) 
             
-            # Save the combined data with only the required columns
-            combined_df.to_csv(output_file, index=False)
 
             print(f"Combined data with selected columns saved to {output_file}")

@@ -47,6 +47,6 @@ ckpts/
 
 # Ignore large files
 datasets/*.csv
-ATTEMPT1/
+training_logs/
 __pycache__/
 datasets/fold_emb/

@@ -110,21 +110,21 @@ if __name__ == "__main__":
    
     
     # load model
-    weight = torch.load('')
+    weight = torch.load('ckpts/AntiBinder_train_128_30_36_6e-05.pth')
     model.load_state_dict(weight)
     print("load success")
 
 
     # choose test dataset
     if args.data == 'test':
-        data_path = ''
+        data_path = 'datasets/test_data.csv'
   
 
     print (data_path)
     val_dataset =antibody_antigen_dataset(antigen_config=antigen_config,antibody_config=antibody_config,data_path=data_path, train=False, test=True, rate1=0)
     val_dataloader = DataLoader(val_dataset, shuffle=False, batch_size=args.batch_size)
   
-    logger = CSVLogger_my(['val_auc', 'val_prescision', 'val_acc', 'val_recall', 'val_f1', 'TN', 'FP', 'FN', 'TP'],f"/AntiBinder/logs/{args.model_name}_{args.latent_dim}_{args.data}.csv")
+    logger = CSVLogger_my(['val_auc', 'val_prescision', 'val_acc', 'val_recall', 'val_f1', 'TN', 'FP', 'FN', 'TP'], "logs/AntiBinder_test_128_30_36_6e-05.csv")
     
     scheduler = None
     trainer = Trainer(
