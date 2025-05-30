@@ -49,17 +49,17 @@ class antibody_antigen_dataset(nn.Module):
         self.antigen_model, alphabet = esm.pretrained.esm2_t33_650M_UR50D()
         self.batch_converter = alphabet.get_batch_converter()
 
-        if train==True and test==False: # train
+        if train and not test:
             print("This part of dataset is for train.")
-            self.data = df.iloc[:int(df.shape[0]*(rate1))]
-            print("len train data", len(self.data)) 
-
-        elif train==False and test == True: # val
+            self.data = df
+            print("len train data", len(self.data))
+        elif not train and test:
             print("This part of dataset is for test.")
-            self.data = df.iloc[int(df.shape[0]*(rate1)):]
-            print("len test data",len(self.data))
+            self.data = df
+            print("len test data", len(self.data))
 
-        self.env = None
+        fold_emb_db_path = os.path.join(FOLD_EMB_DIR, 'fold_emb_for_train')
+        self.env = lmdb.open(fold_emb_db_path, map_size=1024*1024*1024*50, lock=False) # Use constructed path
         self.structure_embedding = None
         self.igfold = IgFoldRunner()
 
@@ -70,14 +70,12 @@ class antibody_antigen_dataset(nn.Module):
         else:
             return torch.cat([sequence,torch.zeros(max_length-len(sequence))]).long()
     
-
     def func_padding_for_esm(self, sequence, max_length):
         if len(sequence) > max_length:
             return sequence[:max_length]
         else:
             return sequence+'<pad>'*(max_length-len(sequence)-2)
         
-
     def region_indexing(self,index):
         data = self.data.iloc[index]
         HF1 = [1 for _ in range(len(data['H-FR1']))]
@@ -92,7 +90,6 @@ class antibody_antigen_dataset(nn.Module):
 
         return vh
     
-
     def __getitem__(self, index):
         data = self.data.iloc[index]
         label = torch.tensor(data['ANT_Binding'])
@@ -113,34 +110,19 @@ class antibody_antigen_dataset(nn.Module):
         antigen_structure = torch.load(antigen_cache_path) # Load using the constructed path
         # ...existing code...
         emb_seq = data['H-FR1'] + data['H-CDR1'] + data['H-FR2'] + data['H-CDR2'] + data['H-FR3'] + data['H-CDR3']+data['H-FR4']
-        #if not emb_seq in self.structure_embedding.keys():
-        fold_emb_db_path = os.path.join(FOLD_EMB_DIR, 'fold_emb_for_train') # Use defined fold emb dir
-        self.env = lmdb.open(fold_emb_db_path, map_size=1024*1024*1024*50, lock=False) # Use constructed path
-        self.structure_embedding = self.env.begin(write=True)
-        # ...existing code...
-        if self.structure_embedding.get(emb_seq.encode()) == None:
-            sequences = {
-                "H": emb_seq
-                }
-            emb = self.igfold.embed(
-                sequences=sequences,
-                )
-            structure = emb.structure_embs.detach().cpu()
-            #self.structure_embedding[emb_seq] = structure
-            self.structure_embedding.put(key=emb_seq.encode(), value=pickle.dumps(structure)) 
-            self.structure_embedding.commit()
-        else:
-            # print("Structure is not none.")
-            structure = pickle.loads(self.structure_embedding.get(emb_seq.encode()))
-            # print("stru"，structure)
-            # print("stru.shape"，structure.shape)
-        self.env.close()
-
+        with self.env.begin(write=True) as txn:
+            structure_bytes = txn.get(emb_seq.encode())
+            if structure_bytes is None:
+                sequences = {"H": emb_seq}
+                emb = self.igfold.embed(sequences=sequences)
+                structure = emb.structure_embs.detach().cpu()
+                txn.put(emb_seq.encode(), pickle.dumps(structure))
+            else:
+                structure = pickle.loads(structure_bytes)
+        
         structure_m1 = len(data['H-FR1'] + data['H-CDR1'] + data['H-FR2'] + data['H-CDR2'] + data['H-FR3'])
         structure_m2 = len(data['H-FR1'] + data['H-CDR1'] + data['H-FR2'] + data['H-CDR2'] + data['H-FR3']+ data['H-CDR3'])
         structure_m3 = len(data['H-FR1'] + data['H-CDR1'] + data['H-FR2'] + data['H-CDR2'] + data['H-FR3']+ data['H-CDR3'] + data['H-FR4'])
-        # print("zero_for_padding", zero_for_padding)
-        # print("zero_for_padding.shape"，zero_for_padding.shape)
         part1_indices = torch.arange(structure_m1)
         part2_indices = torch.arange(structure_m1, structure_m2)
         part3_indices = torch.arange(structure_m2, structure_m3)
@@ -156,22 +138,14 @@ class antibody_antigen_dataset(nn.Module):
             part2_reshaped.detach().clone(),
             part3.detach().clone()
         ), dim=1)
-        # print("stru.shape", structure.shape)
-        zero_for_padding = torch.zeros(1,self.antibody_config.max_position_embeddings-structure.shape[1], structure.shape[-1]).float()
-        structure = torch.cat((structure, zero_for_padding) ,dim=1).squeeze(0)
-
+        zero_for_padding = torch.zeros(1, self.antibody_config.max_position_embeddings - structure.shape[1], structure.shape[-1]).float()
+        structure = torch.cat((structure, zero_for_padding), dim=1).squeeze(0)
 
         antibody = data['vh']
-        # print("antibody："，antibody)
         antibody = torch.tensor([AminoAcid_Vocab[aa] for aa in antibody])
-        # print("antibody："，antibody)
         antibody = self.universal_padding(sequence=antibody, max_length=self.antibody_config.max_position_embeddings)
-        # print("antibody: ", antibody)
-        # print("antibody_shape:", antibody. shape)
 
         at_type = self.region_indexing(index)
-        # print(type)
-        # print(type.shape)
         antibody_structure = structure
 
         antigen = data['Antigen Sequence']
@@ -179,12 +153,11 @@ class antibody_antigen_dataset(nn.Module):
         antigen = self.universal_padding(sequence=antigen, max_length=self.antigen_config.max_position_embeddings)
         
         antigen_structure = antigen_structure[:1024, :]
-        # print(antigen_structure.shape)
-        return [antibody,at_type,antibody_structure],[antigen,antigen_structure],label
+        # Return index as the last item for batch tracking
+        return [antibody, at_type, antibody_structure], [antigen, antigen_structure], label, index
 
     def __len__(self):
         return self.data.shape[0]
-
 
 if __name__ == "__main__":
     # ...existing code...
@@ -198,4 +171,3 @@ if __name__ == "__main__":
     x1 = dataset[0]
  
     pdb.set_trace()
-

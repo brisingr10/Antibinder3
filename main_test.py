@@ -14,6 +14,7 @@ import argparse
 from utils.utils import CSVLogger_my
 from sklearn.metrics import accuracy_score, precision_score, f1_score, classification_report, recall_score,roc_auc_score,confusion_matrix
 sys.path.append ('../') 
+from heavy_chain_split import run_processing
 import warnings 
 warnings.filterwarnings("ignore")
 
@@ -52,46 +53,63 @@ class Trainer():
         
         return roc_auc, precision_score(y, yhat),accuracy_score(y,yhat), recall_score(y, yhat),f1_score(y,yhat),TN,FP,FN,TP
     
-
     def valid(self):
         self.model.eval()
         val_acc = 0
         Y_hat = []
         Y = []
         Y_scores = []
+        all_probs = []
+        all_indices = []
+        all_rows = []
         with torch.no_grad():
-            for antibody_set, antigen_set, label in tqdm(self.valid_dataloader):
+            for batch_idx, (antibody_set, antigen_set, label, indices) in enumerate(self.valid_dataloader):
                 probs = self.model(antibody_set, antigen_set)
-                # print(probs)
-                #10*2
                 y = label.float()
-                yhat = (probs>0.5).long().cuda()
+                yhat = (probs > 0.5).long().cuda()
                 y_scores = probs
+
+                # Save raw probabilities and original data for this batch
+                for i, prob in enumerate(probs):
+                    print(f"Batch {batch_idx}, Sample {i}: Probability of binding = {prob.item():.6f}")
+                    all_probs.append(prob.item())
+                    all_indices.append(indices[i].item())
 
                 Y_hat.extend(yhat)
                 Y.extend(y)
                 Y_scores.extend(y_scores)
 
-        auc, val_prescision, val_acc, recall, val_f1, TN, FP, FN, TP= self.matrix_val((torch.cat([temp.view(1, -1) for temp in Y_hat], dim=0)).long().cpu().numpy(),
-                                                                                      torch.tensor(Y),
-                                                                                      (torch.cat([temp2.view(1, -1) for temp2 in Y_scores], dim=0)).cpu().numpy())
+                # Collect original rows from the dataset
+                batch_rows = self.valid_dataloader.dataset.data.iloc[indices.cpu().numpy()]
+                all_rows.append(batch_rows)
+
+        # Concatenate all original rows
+        import pandas as pd
+        all_rows_df = pd.concat(all_rows, axis=0)
+        all_rows_df = all_rows_df.reset_index(drop=True)
+        all_rows_df['predicted_probability'] = all_probs
+        result_filename = os.path.splitext(os.path.basename(data_path))[0] + "_result.csv"
+        result_path = os.path.join("predictions/output", result_filename)
+        all_rows_df.to_csv(result_path, index=False)
+        print("Raw probabilities with input saved to results")
+
+        auc, val_prescision, val_acc, recall, val_f1, TN, FP, FN, TP = self.matrix_val(
+            (torch.cat([temp.view(1, -1) for temp in Y_hat], dim=0)).long().cpu().numpy(),
+            torch.tensor(Y),
+            (torch.cat([temp2.view(1, -1) for temp2 in Y_scores], dim=0)).cpu().numpy())
         return auc, val_prescision, val_acc, recall, val_f1, TN, FP, FN, TP
     
-
     def train(self):
         val_auc, val_prescision, val_acc, val_recall, val_f1, TN, FP, FN, TP =self.valid()
         self.logger.log([val_auc, val_prescision, val_acc, val_recall, val_f1, TN, FP, FN, TP])
 
-    
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--seed', type=int, default=42)
-    parser.add_argument('--batch_size', type=int, default=10)
+    parser.add_argument('--batch_size', type=int, default=128)
     parser.add_argument('--latent_dim', type=int, default=36)
     parser.add_argument('--model_name', type=str, default= 'AntiBinder')
-    # parser.add_argument('--device', type=str, default='0,1')
     parser.add_argument('--data', type=str, default= 'test')
-
     args = parser.parse_args()
 
     torch.manual_seed(args.seed)
@@ -99,39 +117,34 @@ if __name__ == "__main__":
 
     antigen_config = configuration()
     setattr(antigen_config, 'max_position_embeddings', 1024)
-
     antibody_config = configuration()
     setattr(antibody_config, 'max_position_embeddings',149)
- 
-
-
+    
     model = antibinder(antibody_hidden_dim=1024,antigen_hidden_dim=1024,latent_dim=args.latent_dim,res=False).cuda()
     print(model)
-   
-    
-    # load model
-    weight = torch.load('ckpts/AntiBinder_train_128_30_36_6e-05.pth')
+    weight = torch.load('ckpts/AntiBinder_train_128_40_36_6e-05.pth')
     model.load_state_dict(weight)
     print("load success")
 
-
-    # choose test dataset
     if args.data == 'test':
-        data_path = 'datasets/test_data.csv'
+        data_path = 'predictions/input/test_data.csv'
   
-
     print (data_path)
-    val_dataset =antibody_antigen_dataset(antigen_config=antigen_config,antibody_config=antibody_config,data_path=data_path, train=False, test=True, rate1=0)
+    val_dataset = antibody_antigen_dataset(
+        antigen_config=antigen_config,
+        antibody_config=antibody_config,
+        data_path=data_path,
+        train=False,
+        test=True,
+        rate1=0
+    )
     val_dataloader = DataLoader(val_dataset, shuffle=False, batch_size=args.batch_size)
-  
-    logger = CSVLogger_my(['val_auc', 'val_prescision', 'val_acc', 'val_recall', 'val_f1', 'TN', 'FP', 'FN', 'TP'], "logs/AntiBinder_test_128_30_36_6e-05.csv")
-    
-    scheduler = None
+
     trainer = Trainer(
-        model = model,
-        valid_dataloader = val_dataloader,
-        logger = logger,
-        args= args,
-        )
-    
-    trainer.train()
+        model=model,
+        valid_dataloader=val_dataloader,
+        logger=None,  # Not needed
+        args=args,
+    )
+
+    trainer.valid()

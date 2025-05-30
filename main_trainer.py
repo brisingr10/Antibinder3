@@ -38,10 +38,10 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 
 class Trainer():
-    def __init__(self,model,train_dataloader,args,logger,load=False) -> None:
+    def __init__(self,model,train_dataloader, valid_dataloader, args,logger,load=False) -> None:
         self.model = model
         self.train_dataloader = train_dataloader
-        # self.valid_dataloader = valid_dataloader
+        self.valid_dataloader = valid_dataloader
         # self.test_dataloader = test_dataloader
         self.args = args
         self.logger = logger
@@ -67,9 +67,32 @@ class Trainer():
     
     def matrix_val(self,yhat,y):
         return accuracy_score(y,yhat), precision_score(y, yhat), f1_score(y,yhat), recall_score(y, yhat)
+
+    def validate(self, criterion):
+        self.model.eval()
+        val_loss = 0
+        Y_hat = []
+        Y = []
+        with torch.no_grad():
+            for antibody_set, antigen_set, label in self.valid_dataloader:
+                probs = self.model(antibody_set, antigen_set)
+                yhat = (probs > 0.5).long()
+                y = label.float()
+                if self.args.cuda and torch.cuda.is_available():
+                    y = y.cuda()
+                loss = criterion(probs.view(-1), y.view(-1))
+                val_loss += loss.item()
+                Y_hat.extend(yhat)
+                Y.extend(y)
+        val_loss = val_loss / len(self.valid_dataloader)
+        val_acc, val_precision, val_f1, val_recall = self.matrix_val(
+            (torch.cat([temp.view(1, -1) for temp in Y_hat], dim=0)).long().cpu().numpy(),
+            torch.tensor(Y).cpu()
+        )
+        return val_loss, val_acc, val_precision, val_f1, val_recall
     
     def train(self, criterion, epochs):
-        optimizer = torch.optim.Adam(self.model.parameters(),lr=self.args.lr)
+        optimizer = torch.optim.Adam(self.model.parameters(), lr=self.args.lr)
         for epoch in range(epochs):
             self.model.train(True)
             train_acc = 0
@@ -77,43 +100,45 @@ class Trainer():
             num_train = 0
             Y_hat = []
             Y = []
-            
             try:
                 for antibody_set, antigen_set, label in tqdm(self.train_dataloader):
                     probs = self.model(antibody_set, antigen_set)
-
-                    yhat = (probs>0.5).long()
+                    yhat = (probs > 0.5).long()
                     y = label.float()
                     if self.args.cuda and torch.cuda.is_available():
                         y = y.cuda()
-                    loss = criterion(probs.view(-1),y.view(-1))
-
+                    loss = criterion(probs.view(-1), y.view(-1))
                     optimizer.zero_grad()
                     loss.backward()
                     optimizer.step()
-
                     train_loss += loss.item()
                     num_train += antibody_set[0].shape[0]
                     Y_hat.extend(yhat)
                     Y.extend(y)
-
                 train_acc, train_precision, train_f1, recall = self.matrix_val(
                     (torch.cat([temp.view(1, -1) for temp in Y_hat], dim=0)).long().cpu().numpy(),
                     torch.tensor(Y).cpu()
                 )
                 train_loss = train_loss / len(self.train_dataloader)
 
-                self.logger.log([epoch+1, train_loss, train_acc, train_precision,train_f1,recall])
+                # --- Validation step ---
+                val_loss, val_acc, val_precision, val_f1, val_recall = self.validate(criterion)
+                print(f"Epoch {epoch+1}: Train Loss={train_loss:.4f}, Val Loss={val_loss:.4f}, "
+                      f"Train Acc={train_acc:.4f}, Val Acc={val_acc:.4f}")
 
-                if self.best_loss==None or train_loss < self.best_loss:
-                    print('epoch: ',epoch, 'saving...')
+                self.logger.log([
+                    epoch+1, train_loss, train_acc, train_precision, train_f1, recall,
+                    val_loss, val_acc, val_precision, val_f1, val_recall
+                ])
+
+                if self.best_loss is None or train_loss < self.best_loss:
+                    print('epoch: ', epoch, 'saving...')
                     self.best_loss = train_loss
                     self.save_model()
-            
             except Exception as e:
                 print(f"Error during training epoch {epoch}: {e}")
-                continue
-
+                continue   
+    
     def save_model(self):
         try:
             model_path = os.path.join(self.args.ckpt_dir, 
@@ -186,27 +211,42 @@ if __name__ == "__main__":
 
     # Dataset path selection
     if args.data == 'train':
-        data_path = os.path.join(args.data_dir, 'combined_training_data.csv')
+        train_path = os.path.join(args.data_dir, 'combined_training_data.csv')
+        test_path = os.path.join(args.data_dir, 'test_data.csv')
     # Additional dataset options can be added here
     
-    # Ensure data file exists
-    if not os.path.exists(data_path):
-        print(f"Warning: Data file not found at {data_path}")
-        print("Please ensure the dataset exists at the specified location.")
+    # Ensure train and test data files exist
+    if not os.path.exists(train_path):
+        print(f"Warning: Train data file not found at {train_path}")
+        print("Please ensure the train dataset exists at the specified location.")
+        sys.exit(1)
+    if not os.path.exists(test_path):
+        print(f"Warning: Test data file not found at {test_path}")
+        print("Please ensure the test dataset exists at the specified location.")
         sys.exit(1)
     else:
-        print(f"Using dataset: {data_path}")
+        print(f"Using train dataset: {train_path}")
+        print(f"Using test dataset: {test_path}")
 
     # Try to initialize dataset with appropriate parameters
     try:
         train_dataset = antibody_antigen_dataset(
             antigen_config=antigen_config,
             antibody_config=antibody_config,
-            data_path=data_path, 
+            data_path=train_path, 
             train=True, 
             test=False, 
             rate1=1,
         )
+        test_dataset = antibody_antigen_dataset(
+            antigen_config=antigen_config,
+            antibody_config=antibody_config,
+            data_path=test_path,
+            train=False,
+            test=True,
+            rate1=1,
+        )
+        
     except TypeError as e:
         print(f"Error with dataset initialization: {e}")
         print("Trying alternative initialization...")
@@ -214,10 +254,18 @@ if __name__ == "__main__":
         train_dataset = antibody_antigen_dataset(
             antigen_config=antigen_config,
             antibody_config=antibody_config,
-            data_path=data_path, 
+            data_path=train_path, 
             train=True, 
             test=False, 
             rate1=1
+        )
+        test_dataset = antibody_antigen_dataset(
+            antigen_config=antigen_config,
+            antibody_config=antibody_config,
+            data_path=test_path,
+            train=False,
+            test=True,
+            rate1=1,
         )
     def custom_collate(batch):
         antibody_sets, antigen_sets, labels = zip(*batch)
@@ -226,18 +274,21 @@ if __name__ == "__main__":
         labels = torch.stack(labels)
         return antibody_sets, antigen_sets, labels
 
-    train_dataloader = DataLoader(train_dataset, shuffle=False, batch_size=args.batch_size, collate_fn=custom_collate)
-
+    train_dataloader = DataLoader(train_dataset, shuffle=True, batch_size=args.batch_size, collate_fn=custom_collate)
+    valid_dataloader = DataLoader(test_dataset, shuffle=False, batch_size=args.batch_size, collate_fn=custom_collate)
+    
     # Create logger with path using the directory we ensured exists
     log_file = os.path.join(
         args.log_dir, 
         f"{args.model_name}_{args.data}_{args.batch_size}_{args.epochs}_{args.latent_dim}_{args.lr}.csv"
     )
-    
+ 
     logger = CSVLogger_my(
-        ['epoch', 'train_loss', 'train_acc', 'train_precision', 'train_f1', 'train_recall'],
+        ['epoch', 'train_loss', 'train_acc', 'train_precision', 'train_f1', 'train_recall',
+        'val_loss', 'val_acc', 'val_precision', 'val_f1', 'val_recall'],
         log_file
-    )
+    )   
+    
 
     # Model loading section with error handling
     load = False
@@ -259,6 +310,7 @@ if __name__ == "__main__":
     trainer = Trainer(
         model=model,
         train_dataloader=train_dataloader,
+        valid_dataloader=valid_dataloader,  # Pass your test/validation dataloader here
         logger=logger,
         args=args,
         load=load
