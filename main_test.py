@@ -127,7 +127,7 @@ if __name__ == "__main__":
     print("load success")
 
     if args.data == 'test':
-        data_path = 'predictions/input/test_data.csv'
+        data_path = 'predictions/input/known_meds_test.csv'
   
     print (data_path)
     val_dataset = antibody_antigen_dataset(
