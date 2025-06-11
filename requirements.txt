@@ -1,3 +1,8 @@
+--extra-index-url https://download.pytorch.org/whl/cu128
+torch==2.7.0+cu128
+torchvision==0.18.0+cu128
+torchaudio==2.7.0+cu128
+
 beautifulsoup4==4.12.3
 biopython==1.83
 biotite==0.40.0
