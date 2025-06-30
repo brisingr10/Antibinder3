@@ -89,16 +89,27 @@ class Trainer():
         Y_hat = []
         Y = []
         with torch.no_grad():
-            for antibody_set, antigen_set, label in self.valid_dataloader:
-                probs = self.model(antibody_set, antigen_set)
-                yhat = (probs > 0.5).long()
-                y = label.float()
-                if self.args.cuda and torch.cuda.is_available():
-                    y = y.cuda()
-                loss = criterion(probs.view(-1), y.view(-1))
-                val_loss += loss.item()
-                Y_hat.extend(yhat)
-                Y.extend(y)
+            for batch_data in self.valid_dataloader:
+                try:
+                    # Handle different data formats
+                    if len(batch_data) == 3:
+                        antibody_set, antigen_set, label = batch_data
+                    else:
+                        print(f"Unexpected batch format with {len(batch_data)} elements: {[type(x) for x in batch_data]}")
+                        continue
+                        
+                    probs = self.model(antibody_set, antigen_set)
+                    yhat = (probs > 0.5).long()
+                    y = label.float()
+                    if self.args.cuda and torch.cuda.is_available():
+                        y = y.cuda()
+                    loss = criterion(probs.view(-1), y.view(-1))
+                    val_loss += loss.item()
+                    Y_hat.extend(yhat)
+                    Y.extend(y)
+                except Exception as e:
+                    print(f"Error in validation batch: {e}")
+                    continue
         val_loss = val_loss / len(self.valid_dataloader)
         val_acc, val_precision, val_f1, val_recall = self.matrix_val(
             (torch.cat([temp.view(1, -1) for temp in Y_hat], dim=0)).long().cpu().numpy(),
@@ -116,20 +127,31 @@ class Trainer():
             Y_hat = []
             Y = []
             try:
-                for antibody_set, antigen_set, label in tqdm(self.train_dataloader):
-                    probs = self.model(antibody_set, antigen_set)
-                    yhat = (probs > 0.5).long()
-                    y = label.float()
-                    if self.args.cuda and torch.cuda.is_available():
-                        y = y.cuda()
-                    loss = criterion(probs.view(-1), y.view(-1))
-                    optimizer.zero_grad()
-                    loss.backward()
-                    optimizer.step()
-                    train_loss += loss.item()
-                    num_train += antibody_set[0].shape[0]
-                    Y_hat.extend(yhat)
-                    Y.extend(y)
+                for batch_data in tqdm(self.train_dataloader):
+                    try:
+                        # Handle different data formats
+                        if len(batch_data) == 3:
+                            antibody_set, antigen_set, label = batch_data
+                        else:
+                            print(f"Unexpected batch format with {len(batch_data)} elements: {[type(x) for x in batch_data]}")
+                            continue
+                            
+                        probs = self.model(antibody_set, antigen_set)
+                        yhat = (probs > 0.5).long()
+                        y = label.float()
+                        if self.args.cuda and torch.cuda.is_available():
+                            y = y.cuda()
+                        loss = criterion(probs.view(-1), y.view(-1))
+                        optimizer.zero_grad()
+                        loss.backward()
+                        optimizer.step()
+                        train_loss += loss.item()
+                        num_train += antibody_set[0].shape[0]
+                        Y_hat.extend(yhat)
+                        Y.extend(y)
+                    except Exception as batch_e:
+                        print(f"Error in training batch: {batch_e}")
+                        continue
                 train_acc, train_precision, train_f1, recall = self.matrix_val(
                     (torch.cat([temp.view(1, -1) for temp in Y_hat], dim=0)).long().cpu().numpy(),
                     torch.tensor(Y).cpu()
@@ -298,14 +320,61 @@ if __name__ == "__main__":
             rate1=1,
         )
     def custom_collate(batch):
-        antibody_sets, antigen_sets, labels = zip(*batch)
-        antibody_sets = [torch.stack(x) for x in zip(*antibody_sets)]
-        antigen_sets = [torch.stack(x) for x in zip(*antigen_sets)]
-        labels = torch.stack(labels)
-        return antibody_sets, antigen_sets, labels
+        print(f"Collate function received batch with {len(batch)} samples")
+        if len(batch) > 0:
+            print(f"First sample has {len(batch[0])} elements")
+            for i, element in enumerate(batch[0]):
+                print(f"  Sample element {i}: type={type(element)}, shape={getattr(element, 'shape', 'no shape')}")
+        
+        try:
+            # Handle the case where dataset returns 4 elements instead of 3
+            if len(batch[0]) == 4:
+                # Unpack 4 elements and ignore the 4th one (assuming it's not needed)
+                antibody_sets, antigen_sets, labels, extra = zip(*batch)
+                print(f"Unpacked 4 elements: antibody_sets={len(antibody_sets)}, antigen_sets={len(antigen_sets)}, labels={len(labels)}, extra={len(extra)}")
+                print(f"Extra element type: {type(extra[0])}, value: {extra[0]}")
+            elif len(batch[0]) == 3:
+                # Original expected format
+                antibody_sets, antigen_sets, labels = zip(*batch)
+                print(f"Unpacked 3 elements: antibody_sets={len(antibody_sets)}, antigen_sets={len(antigen_sets)}, labels={len(labels)}")
+            else:
+                raise ValueError(f"Unexpected number of elements in batch: {len(batch[0])}")
+            
+            antibody_sets = [torch.stack(x) for x in zip(*antibody_sets)]
+            antigen_sets = [torch.stack(x) for x in zip(*antigen_sets)]
+            labels = torch.stack(labels)
+            
+            print(f"Final output: antibody_sets={len(antibody_sets)} tensors, antigen_sets={len(antigen_sets)} tensors, labels shape={labels.shape}")
+            return antibody_sets, antigen_sets, labels
+        except Exception as e:
+            print(f"Error in custom_collate: {e}")
+            import traceback
+            traceback.print_exc()
+            raise
 
     train_dataloader = DataLoader(train_dataset, shuffle=True, batch_size=args.batch_size, collate_fn=custom_collate)
     valid_dataloader = DataLoader(test_dataset, shuffle=False, batch_size=args.batch_size, collate_fn=custom_collate)
+    
+    # Debug: Check the first batch to understand data structure
+    print("Debugging dataloader output...")
+    try:
+        first_batch = next(iter(train_dataloader))
+        print(f"First batch has {len(first_batch)} elements")
+        for i, item in enumerate(first_batch):
+            if hasattr(item, '__len__') and not isinstance(item, torch.Tensor):
+                print(f"Element {i}: type={type(item)}, length={len(item)}")
+                if len(item) > 0:
+                    print(f"  First sub-element type: {type(item[0])}")
+                    if hasattr(item[0], 'shape'):
+                        print(f"  First sub-element shape: {item[0].shape}")
+            else:
+                print(f"Element {i}: type={type(item)}, shape={getattr(item, 'shape', 'no shape')}")
+    except Exception as e:
+        print(f"Error checking first batch: {e}")
+        import traceback
+        traceback.print_exc()
+    
+    print("Starting training...")
     
     # Create logger with path using the directory we ensured exists
     log_file = os.path.join(
