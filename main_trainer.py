@@ -13,6 +13,21 @@ import pathlib
 import warnings 
 warnings.filterwarnings("ignore")
 
+# Fix for PyTorch 2.6+ compatibility with IgFold
+import torch
+original_torch_load = torch.load
+
+def patched_torch_load(*args, **kwargs):
+    """Patched torch.load to handle IgFold compatibility issues"""
+    # Always use weights_only=False for compatibility with IgFold and other libraries
+    kwargs['weights_only'] = False
+    return original_torch_load(*args, **kwargs)
+
+# Apply the patch
+torch.load = patched_torch_load
+
+print("Applied PyTorch compatibility patch for IgFold")
+
 # Ensure utils module exists or provide fallback
 try:
     from utils.utils import CSVLogger_my
@@ -45,7 +60,7 @@ class Trainer():
         # self.test_dataloader = test_dataloader
         self.args = args
         self.logger = logger
-        self.best_loss = None
+        self.best_val_loss = float('inf')  # Track best validation loss
         self.load = load
 
         if self.load==False:
@@ -131,20 +146,35 @@ class Trainer():
                     val_loss, val_acc, val_precision, val_f1, val_recall
                 ])
 
-                if self.best_loss is None or train_loss < self.best_loss:
-                    print('epoch: ', epoch, 'saving...')
-                    self.best_loss = train_loss
-                    self.save_model()
+                # Save checkpoint if validation loss improved
+                if val_loss < self.best_val_loss:
+                    print(f'Epoch {epoch+1}: Validation loss improved from {self.best_val_loss:.4f} to {val_loss:.4f}, saving model...')
+                    self.best_val_loss = val_loss
+                    self.save_model(epoch+1, val_loss)
             except Exception as e:
                 print(f"Error during training epoch {epoch}: {e}")
                 continue   
     
-    def save_model(self):
+    def save_model(self, epoch=None, val_loss=None):
         try:
-            model_path = os.path.join(self.args.ckpt_dir, 
-                f"{self.args.model_name}_{self.args.data}_{self.args.batch_size}_{self.args.epochs}_{self.args.latent_dim}_{self.args.lr}.pth")
-            torch.save(self.model.state_dict(), model_path)
-            print(f"Model saved to {model_path}")
+            # Create filename with epoch and validation loss info for best checkpoints
+            if epoch is not None and val_loss is not None:
+                model_path = os.path.join(self.args.ckpt_dir, 
+                    f"{self.args.model_name}_{self.args.data}_best_epoch{epoch}_valloss{val_loss:.4f}.pth")
+            else:
+                # Fallback to original naming if no epoch/loss provided
+                model_path = os.path.join(self.args.ckpt_dir, 
+                    f"{self.args.model_name}_{self.args.data}_{self.args.batch_size}_{self.args.epochs}_{self.args.latent_dim}_{self.args.lr}.pth")
+            
+            # Save model state dict along with additional info
+            checkpoint = {
+                'model_state_dict': self.model.state_dict(),
+                'epoch': epoch,
+                'val_loss': val_loss,
+                'args': self.args
+            }
+            torch.save(checkpoint, model_path)
+            print(f"Best model checkpoint saved to {model_path}")
         except Exception as e:
             print(f"Error saving model: {e}")
 
@@ -296,10 +326,17 @@ if __name__ == "__main__":
         try:
             weight_path = ''  # Path should be specified when load=True
             if os.path.exists(weight_path):
-                weight = torch.load(weight_path, 
-                                   map_location=None if (args.cuda and torch.cuda.is_available()) else torch.device('cpu'))
-                model.load_state_dict(weight)
-                print("Model loaded successfully")
+                checkpoint = torch.load(weight_path, 
+                                       map_location=None if (args.cuda and torch.cuda.is_available()) else torch.device('cpu'))
+                
+                # Handle both old and new checkpoint formats
+                if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
+                    model.load_state_dict(checkpoint['model_state_dict'])
+                    print(f"Model loaded successfully from epoch {checkpoint.get('epoch', 'unknown')} with val_loss {checkpoint.get('val_loss', 'unknown')}")
+                else:
+                    # Old format - just state dict
+                    model.load_state_dict(checkpoint)
+                    print("Model loaded successfully (old format)")
             else:
                 print(f"Warning: Model file not found at {weight_path}")
                 load = False

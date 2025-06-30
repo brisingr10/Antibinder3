@@ -7,28 +7,13 @@ AntiBinder: a sequence-structure hybrid model based on bidirectional cross-atten
 This project is used for predicting antigen-antibody affinity for protein types. The model can be trained and used based solely on sequence data. You can also stack the modules within, making the model's parameters significantly larger, and train it to achieve a plug-and-play effect.
 
 ## Dependencies
-List the libraries and tools required to run the project:
-- Python              3.10+
-- beautifulsoup4      4.12.3
-- biopython           1.83
-- biotite             0.40.0
-- bs4                 0.0.2
-- fair-esm            2.0.0
-- idna                3.4
-- igfold              0.4.0
-- lmdb                1.4.1
-- logomaker           0.8
-- ml-collections      0.1.1
-- scikit-learn        1.4.2
-- seaborn             0.13.2
-- six                 1.16.0
-- tqdm                4.66.2
+python 3.11
 
 ## Installation Guide
 Detailed instructions on how to install and set up the project:
 
 ### Clone the repository
-git clone https://github.com/shiipl/AntiBinder.git
+git clone https://github.com/brisingr10/AntiBinder2.git
 
 ### Install dependencies
 pip install -r requirements.txt
