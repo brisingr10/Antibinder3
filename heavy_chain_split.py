@@ -8,7 +8,7 @@ def process_sequence(seq_index, sequence, scheme):
     output = {'Seq_Index': seq_index}
     try:
         print(f"Processing index {seq_index}: {sequence}")
-        ab_chain = Chain(sequence, scheme=scheme)
+        ab_chain = Chain(sequence, scheme=scheme, use_anarcii=True)
         print(f"Chain type: {ab_chain.chain_type}")
         if ab_chain.chain_type == 'H':
             output.update({
