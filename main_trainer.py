@@ -204,10 +204,10 @@ class Trainer():
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--seed', type=int, default=42)
-    parser.add_argument('--batch_size', type=int, default=128)
+    parser.add_argument('--batch_size', type=int, default=64)  # Reduced from 128 to 64
     parser.add_argument('--latent_dim', type=int, default=36)
-    parser.add_argument('--epochs', type=int, default=40)
-    parser.add_argument('--lr', type=float, default=6e-5, help='learning rate')
+    parser.add_argument('--epochs', type=int, default=20) 
+    parser.add_argument('--lr', type=float, default=1e-4, help='learning rate')  # Increased from 6e-5 to 1e-4
     parser.add_argument('--model_name', type=str, default='AntiBinder')
     parser.add_argument('--cuda', type=bool, default=True)
     parser.add_argument('--device', type=str, default='1')
@@ -320,23 +320,15 @@ if __name__ == "__main__":
             rate1=1,
         )
     def custom_collate(batch):
-        print(f"Collate function received batch with {len(batch)} samples")
-        if len(batch) > 0:
-            print(f"First sample has {len(batch[0])} elements")
-            for i, element in enumerate(batch[0]):
-                print(f"  Sample element {i}: type={type(element)}, shape={getattr(element, 'shape', 'no shape')}")
-        
+        # Removed debug output for better performance
         try:
             # Handle the case where dataset returns 4 elements instead of 3
             if len(batch[0]) == 4:
                 # Unpack 4 elements and ignore the 4th one (assuming it's not needed)
                 antibody_sets, antigen_sets, labels, extra = zip(*batch)
-                print(f"Unpacked 4 elements: antibody_sets={len(antibody_sets)}, antigen_sets={len(antigen_sets)}, labels={len(labels)}, extra={len(extra)}")
-                print(f"Extra element type: {type(extra[0])}, value: {extra[0]}")
             elif len(batch[0]) == 3:
                 # Original expected format
                 antibody_sets, antigen_sets, labels = zip(*batch)
-                print(f"Unpacked 3 elements: antibody_sets={len(antibody_sets)}, antigen_sets={len(antigen_sets)}, labels={len(labels)}")
             else:
                 raise ValueError(f"Unexpected number of elements in batch: {len(batch[0])}")
             
@@ -344,7 +336,6 @@ if __name__ == "__main__":
             antigen_sets = [torch.stack(x) for x in zip(*antigen_sets)]
             labels = torch.stack(labels)
             
-            print(f"Final output: antibody_sets={len(antibody_sets)} tensors, antigen_sets={len(antigen_sets)} tensors, labels shape={labels.shape}")
             return antibody_sets, antigen_sets, labels
         except Exception as e:
             print(f"Error in custom_collate: {e}")
@@ -354,25 +345,6 @@ if __name__ == "__main__":
 
     train_dataloader = DataLoader(train_dataset, shuffle=True, batch_size=args.batch_size, collate_fn=custom_collate)
     valid_dataloader = DataLoader(test_dataset, shuffle=False, batch_size=args.batch_size, collate_fn=custom_collate)
-    
-    # Debug: Check the first batch to understand data structure
-    print("Debugging dataloader output...")
-    try:
-        first_batch = next(iter(train_dataloader))
-        print(f"First batch has {len(first_batch)} elements")
-        for i, item in enumerate(first_batch):
-            if hasattr(item, '__len__') and not isinstance(item, torch.Tensor):
-                print(f"Element {i}: type={type(item)}, length={len(item)}")
-                if len(item) > 0:
-                    print(f"  First sub-element type: {type(item[0])}")
-                    if hasattr(item[0], 'shape'):
-                        print(f"  First sub-element shape: {item[0].shape}")
-            else:
-                print(f"Element {i}: type={type(item)}, shape={getattr(item, 'shape', 'no shape')}")
-    except Exception as e:
-        print(f"Error checking first batch: {e}")
-        import traceback
-        traceback.print_exc()
     
     print("Starting training...")
     
