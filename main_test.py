@@ -1,67 +1,57 @@
 import os
-os.environ["CUDA_VISIBLE_DEVICES"] = '0'
-from antigen_antibody_emb import * 
-from antibinder_model import *
+import sys
+import argparse
+import warnings
+import pandas as pd
 import torch
 import torch.nn as nn 
 import numpy as np 
 from torch.utils.data import DataLoader 
-from copy import deepcopy 
-from tqdm import tqdm
-import os
-import sys
-import argparse
-from utils.utils import CSVLogger_my
-from sklearn.metrics import accuracy_score, precision_score, f1_score, classification_report, recall_score,roc_auc_score,confusion_matrix
-sys.path.append ('../') 
-from heavy_chain_split import run_processing
-import warnings 
+from sklearn.metrics import (accuracy_score, precision_score, f1_score, 
+                           recall_score, roc_auc_score, confusion_matrix)
+
+# Local imports
+from antigen_antibody_emb import * 
+from antibinder_model import *
+
 warnings.filterwarnings("ignore")
+os.environ["CUDA_VISIBLE_DEVICES"] = '0'
 
 
-class Trainer():
-    def __init__(self,model,valid_dataloader,args,logger) -> None:
+class Trainer:
+    def __init__(self, model, valid_dataloader, args):
         self.model = model
         self.valid_dataloader = valid_dataloader
         self.args = args
-        self.logger = logger
-        # self.grad_clip = args.grad_clip # cLip gradients at this value, or disable if == 0.0
-        self.best_loss = None
 
-    def matrix(self,yhat,y):
-        return sum (y==yhat)
-    
-
-    def matrix_val(self,yhat,y,yscores) :
-        print(sum(yhat))
-
-        TN,FP,FN,TP =0,0,0,0
+    def _calculate_metrics(self, yhat, y, yscores):
+        """Calculate evaluation metrics"""
         cm = confusion_matrix(y, yhat).ravel()
-        # print (cm)
-        if len(cm)== 1:
-            # print (y[0].item(), yhat[0].item())
-            if y[0].item() == yhat[0].item()== 0:
-                TN= cm[0]
+        TN, FP, FN, TP = 0, 0, 0, 0
+        
+        if len(cm) == 1:
+            if y[0].item() == yhat[0].item() == 0:
+                TN = cm[0]
             elif y[0].item() == yhat[0].item() == 1:
                 TP = cm[0]
         else:
-            TN,FP,FN,TP = confusion_matrix(y,yhat).ravel()
-        if len(np.unique(y))>1:
-            roc_auc = roc_auc_score(y, yscores)
-        else:
-            roc_auc = None
+            TN, FP, FN, TP = cm
         
-        return roc_auc, precision_score(y, yhat),accuracy_score(y,yhat), recall_score(y, yhat),f1_score(y,yhat),TN,FP,FN,TP
+        roc_auc = roc_auc_score(y, yscores) if len(np.unique(y)) > 1 else None
+        
+        return (roc_auc, precision_score(y, yhat), accuracy_score(y, yhat), 
+                recall_score(y, yhat), f1_score(y, yhat), TN, FP, FN, TP)
     
-    def valid(self):
+    def predict_and_save(self):
+        """Run predictions and save results"""
         self.model.eval()
-        val_acc = 0
         Y_hat = []
         Y = []
         Y_scores = []
         all_probs = []
         all_indices = []
         all_rows = []
+        
         with torch.no_grad():
             for batch_idx, (antibody_set, antigen_set, label, indices) in enumerate(self.valid_dataloader):
                 probs = self.model(antibody_set, antigen_set)
@@ -69,9 +59,7 @@ class Trainer():
                 yhat = (probs > 0.5).long().cuda()
                 y_scores = probs
 
-                # Save raw probabilities and original data for this batch
                 for i, prob in enumerate(probs):
-                    print(f"Batch {batch_idx}, Sample {i}: Probability of binding = {prob.item():.6f}")
                     all_probs.append(prob.item())
                     all_indices.append(indices[i].item())
 
@@ -79,72 +67,87 @@ class Trainer():
                 Y.extend(y)
                 Y_scores.extend(y_scores)
 
-                # Collect original rows from the dataset
                 batch_rows = self.valid_dataloader.dataset.data.iloc[indices.cpu().numpy()]
                 all_rows.append(batch_rows)
 
-        # Concatenate all original rows
-        import pandas as pd
-        all_rows_df = pd.concat(all_rows, axis=0)
-        all_rows_df = all_rows_df.reset_index(drop=True)
-        all_rows_df['predicted_probability'] = all_probs
-        result_filename = os.path.splitext(os.path.basename(data_path))[0] + "_result.csv"
-        result_path = os.path.join("predictions/output", result_filename)
-        all_rows_df.to_csv(result_path, index=False)
-        print("Raw probabilities with input saved to results")
-
-        auc, val_prescision, val_acc, recall, val_f1, TN, FP, FN, TP = self.matrix_val(
+        self._save_results(all_rows, all_probs)
+        
+        auc, precision, accuracy, recall, f1, TN, FP, FN, TP = self._calculate_metrics(
             (torch.cat([temp.view(1, -1) for temp in Y_hat], dim=0)).long().cpu().numpy(),
             torch.tensor(Y),
-            (torch.cat([temp2.view(1, -1) for temp2 in Y_scores], dim=0)).cpu().numpy())
-        return auc, val_prescision, val_acc, recall, val_f1, TN, FP, FN, TP
+            (torch.cat([temp2.view(1, -1) for temp2 in Y_scores], dim=0)).cpu().numpy()
+        )
+        
+        return auc, precision, accuracy, recall, f1, TN, FP, FN, TP
     
-    def train(self):
-        val_auc, val_prescision, val_acc, val_recall, val_f1, TN, FP, FN, TP =self.valid()
-        self.logger.log([val_auc, val_prescision, val_acc, val_recall, val_f1, TN, FP, FN, TP])
+    def _save_results(self, all_rows, all_probs):
+        """Save predictions to CSV file"""
+        all_rows_df = pd.concat(all_rows, axis=0).reset_index(drop=True)
+        all_rows_df['predicted_probability'] = all_probs
+        
+        result_filename = os.path.splitext(os.path.basename(self.args.input_path))[0] + "_result.csv"
+        output_dir = "predictions/output"
+        os.makedirs(output_dir, exist_ok=True)
+        result_path = os.path.join(output_dir, result_filename)
+        
+        all_rows_df.to_csv(result_path, index=False)
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser()
+def main():
+    """Main function to run antibody-antigen binding prediction"""
+    parser = argparse.ArgumentParser(description='AntiBinder Testing Script')
     parser.add_argument('--seed', type=int, default=42)
     parser.add_argument('--batch_size', type=int, default=128)
     parser.add_argument('--latent_dim', type=int, default=36)
-    parser.add_argument('--model_name', type=str, default= 'AntiBinder')
-    parser.add_argument('--data', type=str, default= 'test')
+    parser.add_argument('--model_name', type=str, default='AntiBinder')
+    parser.add_argument('--input_path', type=str, required=True)
+    parser.add_argument('--checkpoint_path', type=str, 
+                        default='ckpts/AntiBinder_train_128_40_36_6e-05.pth')
     args = parser.parse_args()
 
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
 
+    if not os.path.exists(args.input_path):
+        sys.exit(1)
+    if not os.path.exists(args.checkpoint_path):
+        sys.exit(1)
+
+    # Model configuration
     antigen_config = configuration()
     setattr(antigen_config, 'max_position_embeddings', 1024)
     antibody_config = configuration()
-    setattr(antibody_config, 'max_position_embeddings',149)
+    setattr(antibody_config, 'max_position_embeddings', 149)
     
-    model = antibinder(antibody_hidden_dim=1024,antigen_hidden_dim=1024,latent_dim=args.latent_dim,res=False).cuda()
-    print(model)
-    weight = torch.load('ckpts/AntiBinder_train_128_40_36_6e-05.pth')
-    model.load_state_dict(weight)
-    print("load success")
+    # Initialize model
+    model = antibinder(
+        antibody_hidden_dim=1024, 
+        antigen_hidden_dim=1024, 
+        latent_dim=args.latent_dim, 
+        res=False
+    ).cuda()
+    
+    # Load checkpoint
+    checkpoint = torch.load(args.checkpoint_path)
+    if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
+        model.load_state_dict(checkpoint['model_state_dict'])
+    else:
+        model.load_state_dict(checkpoint)
 
-    if args.data == 'test':
-        data_path = 'predictions/input/known_meds_test.csv'
-  
-    print (data_path)
-    val_dataset = antibody_antigen_dataset(
+    # Create dataset and dataloader
+    dataset = antibody_antigen_dataset(
         antigen_config=antigen_config,
         antibody_config=antibody_config,
-        data_path=data_path,
+        data_path=args.input_path,
         train=False,
         test=True,
         rate1=0
     )
-    val_dataloader = DataLoader(val_dataset, shuffle=False, batch_size=args.batch_size)
+    dataloader = DataLoader(dataset, shuffle=False, batch_size=args.batch_size)
 
-    trainer = Trainer(
-        model=model,
-        valid_dataloader=val_dataloader,
-        logger=None,  # Not needed
-        args=args,
-    )
+    # Run predictions
+    trainer = Trainer(model=model, valid_dataloader=dataloader, args=args)
+    trainer.predict_and_save()
 
-    trainer.valid()
+
+if __name__ == "__main__":
+    main()
