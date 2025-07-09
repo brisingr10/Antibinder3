@@ -46,11 +46,21 @@ def run_chain_processing(dataframe, output_filepath, scheme_type, chain_col_name
 
     dataframe.to_csv(output_filepath, index=False)
 
-def preprocess_and_split_raw_data(input_filepath, output_dir, heavy_col, light_col, antigen_col, binding_col):
+def preprocess_and_split_raw_data(input_filepath, output_dir, heavy_col, light_col, antigen_col, binding_col, delta_g_cutoff=None):
     df = pd.read_csv(input_filepath)
     
+    # Handle delta_g conversion if specified
+    if binding_col == "delta_g" and delta_g_cutoff is not None:
+        if "delta_g" not in df.columns:
+            print(f"Error: 'delta_g' column not found in {input_filepath} for delta_g conversion. Skipping file.")
+            return
+        df['ANT_Binding'] = (df["delta_g"] <= delta_g_cutoff).astype(int)
+        binding_col_final = 'ANT_Binding'
+    else:
+        binding_col_final = binding_col
+
     # Ensure required columns are present for final combination
-    required_for_combine = [heavy_col, light_col, antigen_col, binding_col]
+    required_for_combine = [heavy_col, light_col, antigen_col, binding_col_final]
     for col in required_for_combine:
         if col not in df.columns:
             print(f"Error: Missing expected column '{col}' in {input_filepath}. Skipping file.")
@@ -61,7 +71,7 @@ def preprocess_and_split_raw_data(input_filepath, output_dir, heavy_col, light_c
         heavy_col: 'vh',
         light_col: 'vl',
         antigen_col: 'Antigen Sequence',
-        binding_col: 'ANT_Binding'
+        binding_col_final: 'ANT_Binding'
     })
 
     # Process Heavy Chain
@@ -153,7 +163,8 @@ if __name__ == "__main__":
         heavy_col="antibody_seq_a",
         light_col="antibody_seq_b",
         antigen_col="antigen_seq",
-        binding_col="delta_g" # Assuming delta_g can be used as binding info, or needs transformation
+        binding_col="delta_g",
+        delta_g_cutoff=-10.90 # Median value for ~50% binding
     )
 
     # Process met_a.csv
