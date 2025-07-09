@@ -52,3 +52,4 @@ __pycache__/
 datasets/fold_emb/
 antigen_esm
 predictions
+datasets/processed_data/
