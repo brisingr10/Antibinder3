@@ -4,150 +4,166 @@ import argparse
 import warnings
 import pandas as pd
 import torch
-import torch.nn as nn 
-import numpy as np 
-from torch.utils.data import DataLoader 
-from sklearn.metrics import (accuracy_score, precision_score, f1_score, 
-                           recall_score, roc_auc_score, confusion_matrix)
+import torch.nn as nn
+import numpy as np
+from torch.utils.data import DataLoader
+from sklearn.metrics import (
+    accuracy_score, precision_score, f1_score, 
+    recall_score, roc_auc_score, confusion_matrix
+)
 
-# Local imports
-from antigen_antibody_emb import * 
-from antibinder_model import *
+from antigen_antibody_emb import antibody_antigen_dataset
+from antibinder_model import AntiBinder, configuration
 
 warnings.filterwarnings("ignore")
-os.environ["CUDA_VISIBLE_DEVICES"] = '0'
 
+# --- Patched torch.load for IgFold compatibility ---
+try:
+    original_torch_load = torch.load
+    def patched_torch_load(*args, **kwargs):
+        kwargs.setdefault('weights_only', False)
+        return original_torch_load(*args, **kwargs)
+    torch.load = patched_torch_load
+except AttributeError:
+    print("Could not patch torch.load.")
 
-class Trainer:
-    def __init__(self, model, valid_dataloader, args):
+class Tester:
+    def __init__(self, model, dataloader, args):
         self.model = model
-        self.valid_dataloader = valid_dataloader
+        self.dataloader = dataloader
         self.args = args
 
-    def _calculate_metrics(self, yhat, y, yscores):
-        """Calculate evaluation metrics"""
-        cm = confusion_matrix(y, yhat).ravel()
-        TN, FP, FN, TP = 0, 0, 0, 0
-        
-        if len(cm) == 1:
-            if y[0].item() == yhat[0].item() == 0:
-                TN = cm[0]
-            elif y[0].item() == yhat[0].item() == 1:
-                TP = cm[0]
-        else:
-            TN, FP, FN, TP = cm
-        
-        roc_auc = roc_auc_score(y, yscores) if len(np.unique(y)) > 1 else None
-        
-        return (roc_auc, precision_score(y, yhat), accuracy_score(y, yhat), 
-                recall_score(y, yhat), f1_score(y, yhat), TN, FP, FN, TP)
-    
+    def _calculate_metrics(self, y_true, y_pred, y_scores):
+        y_true = y_true.cpu().numpy()
+        y_pred = y_pred.cpu().numpy()
+        y_scores = y_scores.cpu().numpy()
+
+        cm = confusion_matrix(y_true, y_pred).ravel()
+        tn, fp, fn, tp = (cm[0], cm[1], cm[2], cm[3]) if len(cm) == 4 else (0, 0, 0, 0)
+
+        return {
+            'roc_auc': roc_auc_score(y_true, y_scores) if len(np.unique(y_true)) > 1 else 0.0,
+            'precision': precision_score(y_true, y_pred, zero_division=0),
+            'accuracy': accuracy_score(y_true, y_pred),
+            'recall': recall_score(y_true, y_pred, zero_division=0),
+            'f1': f1_score(y_true, y_pred, zero_division=0),
+            'tn': tn, 'fp': fp, 'fn': fn, 'tp': tp
+        }
+
     def predict_and_save(self):
-        """Run predictions and save results"""
         self.model.eval()
-        Y_hat = []
-        Y = []
-        Y_scores = []
-        all_probs = []
-        all_indices = []
-        all_rows = []
-        
+        all_preds, all_targets, all_scores, all_indices = [], [], [], []
+
         with torch.no_grad():
-            for batch_idx, (antibody_set, antigen_set, label, indices) in enumerate(self.valid_dataloader):
-                probs = self.model(antibody_set, antigen_set)
-                y = label.float()
-                yhat = (probs > 0.5).long().cuda()
-                y_scores = probs
+            for batch in self.dataloader:
+                heavy_chain, light_chain, antigen, labels, indices = \
+                    batch['heavy_chain'], batch['light_chain'], batch['antigen'], batch['label'], batch['index']
 
-                for i, prob in enumerate(probs):
-                    all_probs.append(prob.item())
-                    all_indices.append(indices[i].item())
+                if self.args.cuda:
+                    labels = labels.cuda()
 
-                Y_hat.extend(yhat)
-                Y.extend(y)
-                Y_scores.extend(y_scores)
+                scores = self.model(heavy_chain, light_chain, antigen).squeeze()
+                preds = (scores > 0.5).long()
 
-                batch_rows = self.valid_dataloader.dataset.data.iloc[indices.cpu().numpy()]
-                all_rows.append(batch_rows)
+                all_preds.append(preds)
+                all_targets.append(labels)
+                all_scores.append(scores)
+                all_indices.append(indices)
 
-        self._save_results(all_rows, all_probs)
+        # Concatenate all batch results
+        all_preds = torch.cat(all_preds)
+        all_targets = torch.cat(all_targets)
+        all_scores = torch.cat(all_scores)
+        all_indices = torch.cat(all_indices).cpu().numpy()
+
+        # Save results to CSV
+        results_df = self.dataloader.dataset.data.iloc[all_indices].copy()
+        results_df['predicted_probability'] = all_scores.cpu().numpy()
+        results_df['predicted_label'] = all_preds.cpu().numpy()
         
-        auc, precision, accuracy, recall, f1, TN, FP, FN, TP = self._calculate_metrics(
-            (torch.cat([temp.view(1, -1) for temp in Y_hat], dim=0)).long().cpu().numpy(),
-            torch.tensor(Y),
-            (torch.cat([temp2.view(1, -1) for temp2 in Y_scores], dim=0)).cpu().numpy()
-        )
-        
-        return auc, precision, accuracy, recall, f1, TN, FP, FN, TP
-    
-    def _save_results(self, all_rows, all_probs):
-        """Save predictions to CSV file"""
-        all_rows_df = pd.concat(all_rows, axis=0).reset_index(drop=True)
-        all_rows_df['predicted_probability'] = all_probs
-        
-        result_filename = os.path.splitext(os.path.basename(self.args.input_path))[0] + "_result.csv"
         output_dir = "predictions/output"
         os.makedirs(output_dir, exist_ok=True)
-        result_path = os.path.join(output_dir, result_filename)
-        
-        all_rows_df.to_csv(result_path, index=False)
+        result_path = os.path.join(output_dir, os.path.basename(self.args.input_path).replace('.csv', '_results.csv'))
+        results_df.to_csv(result_path, index=False)
+        print(f"Results saved to {result_path}")
 
-def main():
-    """Main function to run antibody-antigen binding prediction"""
-    parser = argparse.ArgumentParser(description='AntiBinder Testing Script')
+        # Calculate and print metrics
+        metrics = self._calculate_metrics(all_targets, all_preds, all_scores)
+        print("--- Test Metrics ---")
+        for key, value in metrics.items():
+            print(f"{key.capitalize()}: {value:.4f}")
+        return metrics
+
+def custom_collate(batch):
+    keys = ['heavy_chain', 'light_chain', 'antigen', 'label', 'index']
+    res = {key: {sub_key: [] for sub_key in batch[0][key]} if isinstance(batch[0][key], dict) else [] for key in keys if key in batch[0]}
+
+    for item in batch:
+        for key in keys:
+            if key not in item: continue
+            if isinstance(item[key], dict):
+                for sub_key in item[key]:
+                    res[key][sub_key].append(item[key][sub_key])
+            else:
+                res[key].append(item[key])
+
+    for key in keys:
+        if key not in res: continue
+        if isinstance(res[key], dict):
+            for sub_key in res[key]:
+                res[key][sub_key] = torch.stack(res[key][sub_key])
+        else:
+            res[key] = torch.stack(res[key]) if isinstance(res[key][0], torch.Tensor) else torch.tensor(res[key])
+            
+    return res
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description='Test AntiBinder model.')
+    parser.add_argument('--input_path', type=str, required=True, help='Path to the input CSV file.')
+    parser.add_argument('--checkpoint_path', type=str, required=True, help='Path to the model checkpoint.')
+    parser.add_argument('--batch_size', type=int, default=64)
+    parser.add_argument('--latent_dim', type=int, default=32)
     parser.add_argument('--seed', type=int, default=42)
-    parser.add_argument('--batch_size', type=int, default=128)
-    parser.add_argument('--latent_dim', type=int, default=36)
-    parser.add_argument('--model_name', type=str, default='AntiBinder')
-    parser.add_argument('--input_path', type=str, required=True)
-    parser.add_argument('--checkpoint_path', type=str, 
-                        default='ckpts/AntiBinder_train_128_40_36_6e-05.pth')
+    parser.add_argument('--no_cuda', action='store_true')
     args = parser.parse_args()
+
+    args.cuda = not args.no_cuda and torch.cuda.is_available()
 
     torch.manual_seed(args.seed)
     np.random.seed(args.seed)
 
     if not os.path.exists(args.input_path):
+        print(f"Error: Input file not found at {args.input_path}")
         sys.exit(1)
     if not os.path.exists(args.checkpoint_path):
+        print(f"Error: Checkpoint not found at {args.checkpoint_path}")
         sys.exit(1)
 
-    # Model configuration
-    antigen_config = configuration()
-    setattr(antigen_config, 'max_position_embeddings', 1024)
-    antibody_config = configuration()
-    setattr(antibody_config, 'max_position_embeddings', 149)
-    
-    # Initialize model
-    model = antibinder(
-        antibody_hidden_dim=1024, 
-        antigen_hidden_dim=1024, 
-        latent_dim=args.latent_dim, 
-        res=False
-    ).cuda()
+    # --- Model and Config ---
+    config = configuration()
+    model = AntiBinder(config, latent_dim=args.latent_dim, res=True)
     
     # Load checkpoint
-    checkpoint = torch.load(args.checkpoint_path)
-    if isinstance(checkpoint, dict) and 'model_state_dict' in checkpoint:
-        model.load_state_dict(checkpoint['model_state_dict'])
+    checkpoint = torch.load(args.checkpoint_path, map_location='cuda' if args.cuda else 'cpu')
+    # Adjust for DataParallel wrapper
+    state_dict = checkpoint['model_state_dict']
+    if next(iter(state_dict)).startswith('module.'):
+        from collections import OrderedDict
+        new_state_dict = OrderedDict()
+        for k, v in state_dict.items():
+            name = k[7:] # remove `module.`
+            new_state_dict[name] = v
+        model.load_state_dict(new_state_dict)
     else:
-        model.load_state_dict(checkpoint)
+        model.load_state_dict(state_dict)
 
-    # Create dataset and dataloader
-    dataset = antibody_antigen_dataset(
-        antigen_config=antigen_config,
-        antibody_config=antibody_config,
-        data_path=args.input_path,
-        train=False,
-        test=True,
-        rate1=0
-    )
-    dataloader = DataLoader(dataset, shuffle=False, batch_size=args.batch_size)
+    if args.cuda:
+        model = model.cuda()
 
-    # Run predictions
-    trainer = Trainer(model=model, valid_dataloader=dataloader, args=args)
-    trainer.predict_and_save()
+    # --- Dataset and Dataloader ---
+    dataset = antibody_antigen_dataset(antigen_config=config, antibody_config=config, data_path=args.input_path, test=True)
+    dataloader = DataLoader(dataset, shuffle=False, batch_size=args.batch_size, collate_fn=custom_collate)
 
-
-if __name__ == "__main__":
-    main()
+    # --- Run Testing ---
+    tester = Tester(model=model, dataloader=dataloader, args=args)
+    tester.predict_and_save()

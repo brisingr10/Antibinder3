@@ -5,169 +5,153 @@ import lmdb
 import pickle
 import torch
 import torch.nn as nn
-import torch.nn. functional as F
 import pandas as pd
-import sys
-from cfg_ab import AminoAcid_Vocab
-from cfg_ab import configuration
-import pdb
-from math import ceil
+from cfg_ab import AminoAcid_Vocab, configuration
 from igfold import IgFoldRunner
 
-# Get the directory where antigen_antibody_emb.py is located (project root)
-PROJECT_ROOT = os.path.dirname(__file__) 
+# --- Setup Paths ---
+PROJECT_ROOT = os.path.dirname(__file__)
 ANTIGEN_ESM_CACHE_DIR = os.path.join(PROJECT_ROOT, 'antigen_esm', 'train')
 FOLD_EMB_DIR = os.path.join(PROJECT_ROOT, 'datasets', 'fold_emb')
+HEAVY_CHAIN_CACHE = os.path.join(FOLD_EMB_DIR, 'heavy_chain_structures')
+LIGHT_CHAIN_CACHE = os.path.join(FOLD_EMB_DIR, 'light_chain_structures')
 
-# Create cache directories if they don't exist
+# --- Create Cache Directories ---
 os.makedirs(ANTIGEN_ESM_CACHE_DIR, exist_ok=True)
-# Note: LMDB directory needs to exist *before* opening. 
-# Ensure 'fold_emb_for_train' exists within FOLD_EMB_DIR if using LMDB caching.
-os.makedirs(os.path.join(FOLD_EMB_DIR, 'fold_emb_for_train'), exist_ok=True) # Uncomment if needed
+os.makedirs(HEAVY_CHAIN_CACHE, exist_ok=True)
+os.makedirs(LIGHT_CHAIN_CACHE, exist_ok=True)
 
 class antibody_antigen_dataset(nn.Module):
-    def __init__(self,
-                antigen_config: configuration, 
-                antibody_config: configuration, 
-                data_path=None,
-                train = True,
-                test = False, 
-                rate1 = 0.8,
-                data = None) -> None:
+    def __init__(self, antigen_config: configuration, antibody_config: configuration, data_path=None, train=True, test=False, data=None):
         super().__init__()
         self.antigen_config = antigen_config
         self.antibody_config = antibody_config
-        print (data_path)
-        if isinstance(data,pd.DataFrame):
-            df = data
-            df.dropna()
+
+        # --- Load Data ---
+        if isinstance(data, pd.DataFrame):
+            df = data.copy()
         else:
-            df = pd.read_csv(data_path)## samples of data, attention to your file type
-            # df = df.dropna()
-            df = df.dropna(subset=['H-FR1','H-CDR1','H-FR2','H-CDR2','H-FR3','H-CDR3','H-FR4'])
-   
+            df = pd.read_csv(data_path)
+
+        # --- Data Validation ---
+        heavy_chain_cols = ['H-FR1', 'H-CDR1', 'H-FR2', 'H-CDR2', 'H-FR3', 'H-CDR3', 'H-FR4']
+        light_chain_cols = ['L-FR1', 'L-CDR1', 'L-FR2', 'L-CDR2', 'L-FR3', 'L-CDR3', 'L-FR4']
+        df.dropna(subset=heavy_chain_cols + light_chain_cols, inplace=True)
+        self.data = df
+
+        # --- ESM and IgFold Models ---
         self.antigen_model, alphabet = esm.pretrained.esm2_t33_650M_UR50D()
         self.batch_converter = alphabet.get_batch_converter()
-
-        if train and not test:
-            print("This part of dataset is for train.")
-            self.data = df
-            print("len train data", len(self.data))
-        elif not train and test:
-            print("This part of dataset is for test.")
-            self.data = df
-            print("len test data", len(self.data))
-
-        fold_emb_db_path = os.path.join(FOLD_EMB_DIR, 'fold_emb_for_train')
-        self.env = lmdb.open(fold_emb_db_path, map_size=1024*1024*1024*50, lock=False) # Use constructed path
-        self.structure_embedding = None
         self.igfold = IgFoldRunner()
 
+        # --- LMDB Caches ---
+        self.heavy_chain_env = lmdb.open(HEAVY_CHAIN_CACHE, map_size=1024**3 * 50, lock=False)
+        self.light_chain_env = lmdb.open(LIGHT_CHAIN_CACHE, map_size=1024**3 * 50, lock=False)
 
-    def universal_padding(self, sequence, max_length):
-        if len(sequence) > max_length:
-            return sequence[:max_length]
-        else:
-            return torch.cat([sequence,torch.zeros(max_length-len(sequence))]).long()
-    
-    def func_padding_for_esm(self, sequence, max_length):
-        if len(sequence) > max_length:
-            return sequence[:max_length]
-        else:
-            return sequence+'<pad>'*(max_length-len(sequence)-2)
+        if train:
+            print(f"Dataset for train with {len(self.data)} samples.")
+        if test:
+            print(f"Dataset for test with {len(self.data)} samples.")
+
+    # --- Padding Utilities ---
+    def _pad_sequence(self, sequence, max_length):
+        return torch.cat([sequence, torch.zeros(max_length - len(sequence))]).long() if len(sequence) < max_length else sequence[:max_length]
+
+    def _pad_for_esm(self, sequence, max_length):
+        return sequence + '<pad>' * (max_length - len(sequence))
+
+    # --- Region Indexing ---
+    def _create_region_indices(self, data_row, chain_type: str):
+        config = self.antibody_config
+        if chain_type == 'heavy':
+            regions = ['H-FR1', 'H-CDR1', 'H-FR2', 'H-CDR2', 'H-FR3', 'H-CDR3', 'H-FR4']
+            mapping = config.heavy_chain_region_type_indexing
+            max_len = config.max_position_embeddings
+        else: # light
+            regions = ['L-FR1', 'L-CDR1', 'L-FR2', 'L-CDR2', 'L-FR3', 'L-CDR3', 'L-FR4']
+            mapping = config.light_chain_region_type_indexing
+            max_len = config.max_position_embeddings_light
+
+        indices = []
+        for region in regions:
+            # Use a default value from the mapping if a specific key like H-FR4 is not present
+            region_id = mapping.get(region, 1) # Default to FR-like index
+            indices.extend([region_id] * len(data_row[region]))
         
-    def region_indexing(self,index):
-        data = self.data.iloc[index]
-        HF1 = [1 for _ in range(len(data['H-FR1']))]
-        HCDR1 = [3 for _ in range(len (data['H-CDR1']))]
-        HF2 = [1 for _ in range(len(data['H-FR2']))]
-        HCDR2 = [4 for _ in range(len(data['H-CDR2']))]
-        HF3 = [1 for _ in range(len(data['H-FR3']))]
-        HCDR3 = [5 for _ in range(len(data['H-CDR3']))]
-        HF4 = [1 for _ in range(len(data['H-FR4']))]
-        vh = torch.tensor(list(HF1+HCDR1+HF2+HCDR2+HF3+HCDR3+HF4))
-        vh = self.universal_padding(vh,self.antibody_config.max_position_embeddings)
+        return self._pad_sequence(torch.tensor(indices), max_len)
 
-        return vh
-    
-    def __getitem__(self, index):
-        data = self.data.iloc[index]
-        label = torch.tensor(data['ANT_Binding'])
-        antigen_seq = str(self.data.iloc[index]['Antigen Sequence'])
-        antigen_cache_filename = hashlib.md5(antigen_seq.encode()).hexdigest() + '.pt'
-        antigen_cache_path = os.path.join(ANTIGEN_ESM_CACHE_DIR, antigen_cache_filename) # Use defined cache dir
-
-        if not os.path.exists(antigen_cache_path): # Check using the constructed path
-            antigen = self.func_padding_for_esm(self.data['Antigen Sequence'].iloc[index], self.antigen_config.max_position_embeddings)
-            antigen = [('antigen', antigen)]
-            batch_labels, batch_strs, antigen = self.batch_converter(antigen)
-            with torch.no_grad():
-                self.antigen_model = self.antigen_model.eval()
-                antigen = self.antigen_model(antigen.squeeze(1), repr_layers=[33], return_contacts=True)
-                antigen = antigen['representations'][33].squeeze(0)
-            torch.save(antigen, antigen_cache_path) # Save using the constructed path
-        
-        antigen_structure = torch.load(antigen_cache_path) # Load using the constructed path
-        # ...existing code...
-        emb_seq = data['H-FR1'] + data['H-CDR1'] + data['H-FR2'] + data['H-CDR2'] + data['H-FR3'] + data['H-CDR3']+data['H-FR4']
-        with self.env.begin(write=True) as txn:
-            structure_bytes = txn.get(emb_seq.encode())
+    # --- Structure Embedding ---
+    def _get_structure_embedding(self, sequence, chain_type, lmdb_env):
+        with lmdb_env.begin(write=True) as txn:
+            structure_bytes = txn.get(sequence.encode())
             if structure_bytes is None:
-                sequences = {"H": emb_seq}
+                sequences = {"H" if chain_type == 'heavy' else "L": sequence}
                 emb = self.igfold.embed(sequences=sequences)
                 structure = emb.structure_embs.detach().cpu()
-                txn.put(emb_seq.encode(), pickle.dumps(structure))
+                txn.put(sequence.encode(), pickle.dumps(structure))
             else:
                 structure = pickle.loads(structure_bytes)
-        
-        structure_m1 = len(data['H-FR1'] + data['H-CDR1'] + data['H-FR2'] + data['H-CDR2'] + data['H-FR3'])
-        structure_m2 = len(data['H-FR1'] + data['H-CDR1'] + data['H-FR2'] + data['H-CDR2'] + data['H-FR3']+ data['H-CDR3'])
-        structure_m3 = len(data['H-FR1'] + data['H-CDR1'] + data['H-FR2'] + data['H-CDR2'] + data['H-FR3']+ data['H-CDR3'] + data['H-FR4'])
-        part1_indices = torch.arange(structure_m1)
-        part2_indices = torch.arange(structure_m1, structure_m2)
-        part3_indices = torch.arange(structure_m2, structure_m3)
+        return structure
 
-        part1 = structure.index_select(1, part1_indices)
-        part2_full = structure.index_select(1, part2_indices)
-        part2_mean = part2_full.mean(dim=1)
-        part2_reshaped = part2_mean.view(part2_mean.size(0), 1, part2_mean.size(1))
-        part3 = structure.index_select(1, part3_indices)
+    def __getitem__(self, index):
+        data_row = self.data.iloc[index]
+        label = torch.tensor(data_row['ANT_Binding'])
 
-        structure = torch.cat((
-            part1.detach().clone(),
-            part2_reshaped.detach().clone(),
-            part3.detach().clone()
-        ), dim=1)
-        zero_for_padding = torch.zeros(1, self.antibody_config.max_position_embeddings - structure.shape[1], structure.shape[-1]).float()
-        structure = torch.cat((structure, zero_for_padding), dim=1).squeeze(0)
+        # --- Antigen Processing ---
+        antigen_seq = str(data_row['Antigen Sequence'])
+        antigen_cache_path = os.path.join(ANTIGEN_ESM_CACHE_DIR, hashlib.md5(antigen_seq.encode()).hexdigest() + '.pt')
+        if not os.path.exists(antigen_cache_path):
+            padded_antigen = self._pad_for_esm(antigen_seq, self.antigen_config.max_position_embeddings)
+            batch_labels, batch_strs, antigen_tokens = self.batch_converter([('antigen', padded_antigen)])
+            with torch.no_grad():
+                results = self.antigen_model(antigen_tokens, repr_layers=[33], return_contacts=True)
+            antigen_structure = results['representations'][33].squeeze(0)
+            torch.save(antigen_structure, antigen_cache_path)
+        else:
+            antigen_structure = torch.load(antigen_cache_path)
 
-        antibody = data['vh']
-        antibody = torch.tensor([AminoAcid_Vocab[aa] for aa in antibody])
-        antibody = self.universal_padding(sequence=antibody, max_length=self.antibody_config.max_position_embeddings)
+        # --- Heavy Chain Processing ---
+        vh_seq = "".join([str(data_row[col]) for col in ['H-FR1', 'H-CDR1', 'H-FR2', 'H-CDR2', 'H-FR3', 'H-CDR3', 'H-FR4']])
+        vh_structure = self._get_structure_embedding(vh_seq, 'heavy', self.heavy_chain_env).squeeze(0)
+        vh_token_ids = self._pad_sequence(torch.tensor([AminoAcid_Vocab[aa] for aa in vh_seq]), self.antibody_config.max_position_embeddings)
+        vh_region_indices = self._create_region_indices(data_row, 'heavy')
 
-        at_type = self.region_indexing(index)
-        antibody_structure = structure
+        # --- Light Chain Processing ---
+        vl_seq = "".join([str(data_row[col]) for col in ['L-FR1', 'L-CDR1', 'L-FR2', 'L-CDR2', 'L-FR3', 'L-CDR3', 'L-FR4']])
+        vl_structure = self._get_structure_embedding(vl_seq, 'light', self.light_chain_env).squeeze(0)
+        vl_token_ids = self._pad_sequence(torch.tensor([AminoAcid_Vocab[aa] for aa in vl_seq]), self.antibody_config.max_position_embeddings_light)
+        vl_region_indices = self._create_region_indices(data_row, 'light')
 
-        antigen = data['Antigen Sequence']
-        antigen = torch.tensor([AminoAcid_Vocab[aa] for aa in antigen])
-        antigen = self.universal_padding(sequence=antigen, max_length=self.antigen_config.max_position_embeddings)
-        
-        antigen_structure = antigen_structure[:1024, :]
-        # Return index as the last item for batch tracking
-        return [antibody, at_type, antibody_structure], [antigen, antigen_structure], label, index
+        # --- Antigen Sequence to Tokens ---
+        antigen_token_ids = self._pad_sequence(torch.tensor([AminoAcid_Vocab[aa] for aa in antigen_seq]), self.antigen_config.max_position_embeddings)
+
+        return {
+            "heavy_chain": {"tokens": vh_token_ids, "regions": vh_region_indices, "structure": vh_structure},
+            "light_chain": {"tokens": vl_token_ids, "regions": vl_region_indices, "structure": vl_structure},
+            "antigen": {"tokens": antigen_token_ids, "structure": antigen_structure},
+            "label": label,
+            "index": index
+        }
 
     def __len__(self):
-        return self.data.shape[0]
+        return len(self.data)
 
 if __name__ == "__main__":
-    # ...existing code...
+    # Example usage
     os.environ["CUDA_VISIBLE_DEVICES"] = '0,1'
-
-    # Construct the data path relative to the project root
-    data_path = os.path.join(PROJECT_ROOT, 'datasets', 'combined_training_data.csv') 
-    dataset = antibody_antigen_dataset(antigen_config=antigen_config,antibody_config=antibody_config, data_path=data_path, train=True, test=False, rate1=0.0001)
-    # ...existing code...
-    # pdb. set_trace()
-    x1 = dataset[0]
- 
+    antigen_config = configuration()
+    antibody_config = configuration()
+    data_path = os.path.join(PROJECT_ROOT, 'datasets', 'combined_training_data.csv')
+    
+    dataset = antibody_antigen_dataset(
+        antigen_config=antigen_config, 
+        antibody_config=antibody_config, 
+        data_path=data_path, 
+        train=True
+    )
+    
+    # Fetch a sample
+    sample = dataset[0]
+    print("Sample fetched successfully!")
+    import pdb
     pdb.set_trace()
