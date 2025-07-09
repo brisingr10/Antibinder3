@@ -120,7 +120,7 @@ class antibody_antigen_dataset(nn.Module):
         vl_seq = "".join([str(data_row[col]) for col in ['L-FR1', 'L-CDR1', 'L-FR2', 'L-CDR2', 'L-FR3', 'L-CDR3', 'L-FR4']])
         vl_structure = self._get_structure_embedding(vl_seq, 'light', self.light_chain_env).squeeze(0)
         vl_token_ids = self._pad_sequence(torch.tensor([AminoAcid_Vocab[aa] for aa in vl_seq]), self.antibody_config.max_position_embeddings_light)
-        vl_region_indices = self._create_region_indices(data_row, 'light')
+        vl_region_indices = self._create_region_indices(data_row, 'vl')
 
         # --- Antigen Sequence to Tokens ---
         antigen_token_ids = self._pad_sequence(torch.tensor([AminoAcid_Vocab[aa] for aa in antigen_seq]), self.antigen_config.max_position_embeddings)

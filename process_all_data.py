@@ -172,7 +172,7 @@ if __name__ == "__main__":
         input_filepath=os.path.join(base_raw_data_path, "MET", "met_a.csv"),
         output_dir=processed_split_data_output_path,
         heavy_col="vh",
-        light_col=None, # No light chain in this file
+        vl_col=None, # No light chain in this file
         antigen_col="Antigen Sequence",
         binding_col="ANT_Binding"
     )

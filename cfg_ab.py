@@ -64,6 +64,6 @@ class configuration():
         self.heavy_chain_region_type_indexing = {
             'H-FR1': 1, 'H-CDR1': 2, 'H-FR2': 3, 'H-CDR2': 4, 'H-FR3': 5
         }
-        self.light_chain_region_type_indexing = {
+        self.vl_region_type_indexing = {
             'L-FR1': 6, 'L-CDR1': 7, 'L-FR2': 8, 'L-CDR2': 9, 'L-FR3': 10
         }

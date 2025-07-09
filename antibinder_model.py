@@ -165,14 +165,14 @@ if __name__ == '__main__':
     # --- Dummy Data ---
     batch_size = 4
     heavy_chain_data = {
-        'tokens': torch.randint(0, 21, (batch_size, config.max_position_embeddings)),
+        'tokens': torch.randint(0, 21, (batch_size, config.heavy_chain_max_position_embeddings)),
         'regions': torch.randint(0, 6, (batch_size, config.max_position_embeddings)),
         'structure': torch.rand(batch_size, config.max_position_embeddings, 64)
     }
     light_chain_data = {
         'tokens': torch.randint(0, 21, (batch_size, config.max_position_embeddings_light)),
         'regions': torch.randint(0, 5, (batch_size, config.max_position_embeddings_light)),
-        'structure': torch.rand(batch_size, config.max_position_embeddings_light, 64)
+        'structure': torch.rand(batch_size, config.light_chain_max_position_embeddings, 64)
     }
     antigen_data = {
         'tokens': torch.randint(0, 21, (batch_size, config.max_position_embeddings)),
