@@ -21,37 +21,30 @@ pip install -r requirements.txt
 ## Usage Instructions
 
 ### 1. Data Preparation
-Before training or prediction, your raw antibody-antigen binding data needs to be processed to extract relevant regions and combine them into a single dataset. Ensure your raw data CSV files (e.g., in `datasets/raw_data/`) contain columns for both **Heavy Chain (vh)** and **Light Chain (vl)** sequences, along with **Antigen Sequence** and **ANT_Binding** (for affinity/binding labels).
+Before training or prediction, your raw antibody-antigen binding data needs to be processed to extract relevant regions and combine them into a single dataset.
 
 **Steps:**
 
-1.  **Split Heavy Chain (VH) Sequences:**
-    Use `heavy_chain_split.py` to split the VH sequences into their respective Framework (FR) and Complementarity Determining Region (CDR) segments (H-FR1, H-CDR1, etc.).
+1.  **Process Raw Data:**
+    Use `process_all_data.py` to perform all necessary data preprocessing, including:
+    *   Reading raw data from `datasets/raw_data/`.
+    *   Renaming columns (e.g., `Heavy` to `vh`, `Light` to `vl`, `antigen` to `Antigen Sequence`, `Label` to `ANT_Binding`) based on internal configuration for known datasets.
+    *   Splitting Heavy Chain (VH) and Light Chain (VL) sequences into their respective Framework (FR) and Complementarity Determining Region (CDR) segments (H-FR1, H-CDR1, etc., and L-FR1, L-CDR1, etc.).
+    *   Combining all processed data files into a single dataset.
+    *   Performing data validation (dropping rows with missing VH or VL sequences and duplicates).
+    *   Splitting the combined data into `combined_training_data.csv` and `test_data.csv` for training and validation.
+
+    Ensure your raw data CSV files in `datasets/raw_data/` contain the necessary columns for heavy chain, light chain, antigen sequence, and binding labels, as expected by `process_all_data.py` (refer to the script's `if __name__ == "__main__":` block for specific column mappings for each dataset).
+
     ```bash
-    python heavy_chain_split.py
-    # This script processes raw data files and saves the output in the process_data directory.
-    # You might need to adjust the input_file_path and output_file_name variables within the script.
+    python process_all_data.py
+    # This script reads from datasets/raw_data/, outputs intermediate processed files to datasets/process_data/,
+    # and saves the final combined_training_data.csv and test_data.csv to the datasets/ directory.
     ```
 
-2.  **Split Light Chain (VL) Sequences:**
-    Similarly, use `light_chain_split.py` to split the VL sequences into their FR and CDR segments (L-FR1, L-CDR1, etc.).
-    ```bash
-    python light_chain_split.py
-    # This script processes raw data files and saves the output in the process_data directory.
-    # You might need to adjust the input_file_path and output_file_name variables within the script.
-    ```
-
-3.  **Combine Processed Data:**
-    After splitting both heavy and light chains, use `datasets/combine_data.py` to merge all processed data files into a single `combined_training_data.csv` (and `test_data.csv`) file, which will be used for training and validation.
-    ```bash
-    python datasets/combine_data.py
-    # This script reads from the process_data directory and outputs to the datasets directory.
-    # It also handles dropping rows with missing VH or VL sequences and duplicates.
-    ```
-
-    **Required Columns in Combined Data:**
-    The `combine_data.py` script expects the following columns to be present after splitting:
-    `vh`, `vl`, `Antigen Sequence`, 
+    **Output Data Structure:**
+    The `combined_training_data.csv` and `test_data.csv` files will contain the following columns:
+    `vh`, `vl`, `Antigen Sequence`,
     `H-FR1`, `H-CDR1`, `H-FR2`, `H-CDR2`, `H-FR3`, `H-CDR3`, `H-FR4`,
     `L-FR1`, `L-CDR1`, `L-FR2`, `L-CDR2`, `L-FR3`, `L-CDR3`, `L-FR4`,
     `ANT_Binding`
