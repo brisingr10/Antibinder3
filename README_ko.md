@@ -21,7 +21,7 @@ pip install -r requirements.txt
 ## 사용 방법
 
 ### 1. 데이터 준비
-훈련 또는 예측을 시작하기 전에, 원시 항체-항원 결합 데이터를 처리하여 필요한 영역을 추출하고 하나의 데이터셋으로 통합해야 합니다.
+훈련 또는 예측을 시작하기 전에, raw 항체-항원 결합 데이터를 처리하여 필요한 영역을 추출하고 하나의 데이터셋으로 통합해야 합니다.
 
 **단계:**
 
@@ -29,25 +29,50 @@ pip install -r requirements.txt
     `process_all_data.py` 스크립트를 사용하여 다음을 포함한 모든 필요한 데이터 전처리를 수행합니다:
     *   `datasets/raw_data/`에서 raw 데이터 읽기.
     *   알려진 데이터셋에 대한 내부 구성에 따라 열 이름 변경(예: `Heavy`를 `vh`로, `Light`를 `vl`로, `antigen`을 `Antigen Sequence`로, `Label`을 `ANT_Binding`으로).
-    *   중쇄(VH) 및 경쇄(VL) 서열을 해당 프레임워크(FR) 및 상보성 결정 영역(CDR) 세그먼트(H-FR1, H-CDR1 등, L-FR1, L-CDR1 등)로 분할.
+    *   Heavy Chain (VH) 및 Light Chain (VL) 서열을 해당 프레임워크(FR) 및 상보성 결정 영역(CDR) 세그먼트(H-FR1, H-CDR1 등, L-FR1, L-CDR1 등)로 분할하여 단일 통합 파일로 생성.
     *   모든 처리된 데이터 파일을 단일 데이터셋으로 결합.
     *   데이터 유효성 검사 수행(누락된 VH 또는 VL 서열이 있는 행 및 중복 행 제거).
-    *   결합된 데이터를 훈련 및 검증을 위해 `combined_training_data.csv` 및 `test_data.csv`로 분할.
+    *   결합된 데이터를 훈련 및 검증을 위해 `training_data.csv` 및 `test_data.csv`로 분할.
 
-    `datasets/raw_data/`의 raw 데이터 CSV 파일에는 `process_all_data.py`가 예상하는 중쇄, 경쇄, 항원 서열 및 결합 라벨에 필요한 열이 포함되어 있는지 확인하십시오(각 데이터셋에 대한 특정 열 매핑은 스크립트의 `if __name__ == "__main__:"` 블록을 참조).
+    `datasets/raw_data/`의 raw 데이터 CSV 파일에는 `process_all_data.py`가 예상하는 Heavy Chain, Light Chain, 항원 서열 및 결합 라벨에 필요한 열이 포함되어 있는지 확인하십시오(각 데이터셋에 대한 특정 열 매핑은 스크립트의 `if __name__ == "__main__:"` 블록을 참조).
 
     ```bash
     python process_all_data.py
-    # 이 스크립트는 datasets/raw_data/에서 데이터를 읽고, 중간 처리된 파일을 datasets/process_data/에 출력하며,
-    # 최종 combined_training_data.csv 및 test_data.csv를 datasets/ 디렉토리에 저장합니다.
+    # 이 스크립트는 datasets/raw_data/에서 데이터를 읽고, 처리된 파일을 datasets/process_data/에 생성하며,
+    # 최종 training_data.csv 및 test_data.csv를 datasets/ 디렉토리에 저장합니다.
     ```
 
     **출력 데이터 구조:**
-    `combined_training_data.csv` 및 `test_data.csv` 파일에는 다음 열이 포함됩니다:
+    `training_data.csv` 및 `test_data.csv` 파일에는 다음 열이 포함됩니다:
     `vh`, `vl`, `Antigen Sequence`,
     `H-FR1`, `H-CDR1`, `H-FR2`, `H-CDR2`, `H-FR3`, `H-CDR3`, `H-FR4`,
     `L-FR1`, `L-CDR1`, `L-FR2`, `L-CDR2`, `L-FR3`, `L-CDR3`, `L-FR4`,
     `ANT_Binding`
+
+### 데이터 구조 상세 정보
+
+훈련 데이터는 다음과 같은 주요 구성 요소를 가진 항체-항원 결합 쌍으로 구성됩니다:
+
+**항체 구조:**
+- **Heavy Chain (VH)**: 완전한 Heavy Chain 서열을 포함
+- **Light Chain (VL)**: 완전한 Light Chain 서열을 포함
+- **CDR/FR 영역**: 각 사슬은 7개 영역으로 분할됩니다:
+  - 프레임워크 영역(FR1, FR2, FR3, FR4): 구조적 골격 영역
+  - 상보성 결정 영역(CDR1, CDR2, CDR3): 항원 결합 영역
+  - CDR3는 일반적으로 가장 가변적이며 결합 특이성에 중요함
+
+**항원 구조:**
+- **항원 서열**: 표적 단백질의 완전한 아미노산 서열
+- 다양한 출처(바이러스 단백질, 종양 항원 등)에서 유래 가능
+
+**결합 라벨:**
+- **ANT_Binding**: 이진 분류(0 = 결합하지 않음, 1 = 결합함)
+- 연속적인 결합 친화도 값(delta_g 등)을 가진 데이터셋의 경우, 임계값을 적용하여 이진 라벨로 변환
+
+**데이터 출처:**
+- **CoV-AbDab**: SARS-CoV-2 결합 데이터를 포함한 COVID-19 항체 데이터베이스
+- **BioMap**: 열역학적 측정값을 포함한 항체-항원 결합 친화도 데이터셋
+- 동일한 구조를 따라 추가 데이터셋 추가 가능
 
 ### 2. 모델 훈련
 데이터 준비 및 결합이 완료되면 `main_trainer.py`를 사용하여 AntiBinder 모델을 훈련할 수 있습니다.
@@ -66,7 +91,7 @@ python main_trainer.py \
 # --seed: 재현성을 위한 랜덤 시드 (기본값: 42)
 ```
 
-*   **설정:** 모델 파라미터 및 아키텍처 설정(예: 중쇄 및 경쇄의 `max_position_embeddings`, 영역 유형 인덱싱)은 `cfg_ab.py` 파일에 정의되어 있습니다.
+*   **설정:** 모델 파라미터 및 아키텍처 설정(예: Heavy Chain 및 Light Chain의 `max_position_embeddings`, 영역 유형 인덱싱)은 `cfg_ab.py` 파일에 정의되어 있습니다.
 *   **데이터 로딩 및 임베딩:** `antigen_antibody_emb.py` 스크립트는 결합된 데이터를 로드하고, 항원에 대한 ESM 임베딩 및 항체 사슬에 대한 IgFold 구조 임베딩을 생성합니다. 또한 효율적인 데이터 검색을 위해 LMDB 캐시를 관리합니다.
 
 ### 3. 모델로 예측
@@ -88,9 +113,9 @@ python main_test.py \
 
 ## 모델 아키텍처
 핵심 모델 아키텍처는 `antibinder_model.py`에 정의되어 있으며, 다음을 포함합니다:
-*   `Combine_Embedding`: 중쇄 및 경쇄 모두에 대한 서열 및 구조 임베딩의 결합을 처리합니다.
+*   `Combine_Embedding`: Heavy Chain 및 Light Chain 모두에 대한 서열 및 구조 임베딩의 결합을 처리합니다.
 *   `BiCrossAttentionBlock`: 항체(결합된 VH+VL)와 항원 임베딩 간의 양방향 교차-어텐션 메커니즘을 구현합니다.
 *   `AntiBinder`: 임베딩 결합, 교차-어텐션 및 최종 분류 계층을 총괄하는 주 모델 클래스입니다.
 
 ## 캐시 관리
-ESM 및 IgFold 임베딩은 LMDB를 사용하여 캐시되므로 후속 실행 시 속도가 향상됩니다. `datasets/fold_emb/` 및 `antigen_esm/` 디렉토리 내에 중쇄 구조, 경쇄 구조 및 항원 ESM 임베딩을 위한 별도의 캐시 디렉토리가 유지 관리됩니다.
+ESM 및 IgFold 임베딩은 LMDB를 사용하여 캐시되므로 후속 실행 시 속도가 향상됩니다. `datasets/fold_emb/` 및 `antigen_esm/` 디렉토리 내에 Heavy Chain 구조, Light Chain 구조 및 항원 ESM 임베딩을 위한 별도의 캐시 디렉토리가 유지 관리됩니다.

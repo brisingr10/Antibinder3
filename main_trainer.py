@@ -53,6 +53,8 @@ class Trainer:
         self.args = args
         self.logger = logger
         self.best_val_loss = float('inf')
+        # Set device for consistent tensor operations
+        self.device = torch.device('cuda' if args.cuda else 'cpu')
         if not load:
             self._init_model()
 
@@ -84,8 +86,8 @@ class Trainer:
         for batch in tqdm(dataloader, desc="Training" if is_train else "Validation"):
             heavy_chain, light_chain, antigen, labels = batch['heavy_chain'], batch['light_chain'], batch['antigen'], batch['label']
             
-            if self.args.cuda:
-                labels = labels.cuda()
+            # Move labels to appropriate device
+            labels = labels.to(self.device)
 
             with torch.set_grad_enabled(is_train):
                 predictions = self.model(heavy_chain, light_chain, antigen)
@@ -190,9 +192,12 @@ if __name__ == "__main__":
     model = AntiBinder(config, latent_dim=args.latent_dim, res=True)
     if args.cuda:
         model = nn.DataParallel(model).cuda()
+        print(f"Model loaded on {torch.cuda.device_count()} GPU(s)")
+    else:
+        print("Model loaded on CPU")
 
     # --- Datasets and Dataloaders ---
-    train_path = os.path.join(args.data_dir, 'combined_training_data.csv')
+    train_path = os.path.join(args.data_dir, 'training_data.csv')
     test_path = os.path.join(args.data_dir, 'test_data.csv')
     if not os.path.exists(train_path) or not os.path.exists(test_path):
         print(f"Error: Dataset files not found at {train_path} or {test_path}")

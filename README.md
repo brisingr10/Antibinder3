@@ -29,25 +29,50 @@ Before training or prediction, your raw antibody-antigen binding data needs to b
     Use `process_all_data.py` to perform all necessary data preprocessing, including:
     *   Reading raw data from `datasets/raw_data/`.
     *   Renaming columns (e.g., `Heavy` to `vh`, `Light` to `vl`, `antigen` to `Antigen Sequence`, `Label` to `ANT_Binding`) based on internal configuration for known datasets.
-    *   Splitting Heavy Chain (VH) and Light Chain (VL) sequences into their respective Framework (FR) and Complementarity Determining Region (CDR) segments (H-FR1, H-CDR1, etc., and L-FR1, L-CDR1, etc.).
+    *   Splitting Heavy Chain (VH) and Light Chain (VL) sequences into their respective Framework (FR) and Complementarity Determining Region (CDR) segments (H-FR1, H-CDR1, etc., and L-FR1, L-CDR1, etc.) in a single combined file.
     *   Combining all processed data files into a single dataset.
     *   Performing data validation (dropping rows with missing VH or VL sequences and duplicates).
-    *   Splitting the combined data into `combined_training_data.csv` and `test_data.csv` for training and validation.
+    *   Splitting the combined data into `training_data.csv` and `test_data.csv` for training and validation.
 
     Ensure your raw data CSV files in `datasets/raw_data/` contain the necessary columns for heavy chain, light chain, antigen sequence, and binding labels, as expected by `process_all_data.py` (refer to the script's `if __name__ == "__main__":` block for specific column mappings for each dataset).
 
     ```bash
     python process_all_data.py
-    # This script reads from datasets/raw_data/, outputs intermediate processed files to datasets/process_data/,
-    # and saves the final combined_training_data.csv and test_data.csv to the datasets/ directory.
+    # This script reads from datasets/raw_data/, creates processed files in datasets/process_data/,
+    # and saves the final training_data.csv and test_data.csv to the datasets/ directory.
     ```
 
     **Output Data Structure:**
-    The `combined_training_data.csv` and `test_data.csv` files will contain the following columns:
+    The `training_data.csv` and `test_data.csv` files will contain the following columns:
     `vh`, `vl`, `Antigen Sequence`,
     `H-FR1`, `H-CDR1`, `H-FR2`, `H-CDR2`, `H-FR3`, `H-CDR3`, `H-FR4`,
     `L-FR1`, `L-CDR1`, `L-FR2`, `L-CDR2`, `L-FR3`, `L-CDR3`, `L-FR4`,
     `ANT_Binding`
+
+### Data Structure Details
+
+The training data consists of antibody-antigen binding pairs with the following key components:
+
+**Antibody Structure:**
+- **Heavy Chain (VH)**: Contains the complete heavy chain sequence
+- **Light Chain (VL)**: Contains the complete light chain sequence  
+- **CDR/FR Regions**: Each chain is split into 7 regions:
+  - Framework regions (FR1, FR2, FR3, FR4): Structural scaffold regions
+  - Complementarity Determining Regions (CDR1, CDR2, CDR3): Antigen-binding regions
+  - CDR3 is typically the most variable and important for binding specificity
+
+**Antigen Structure:**
+- **Antigen Sequence**: Complete amino acid sequence of the target protein
+- Can be from various sources (viral proteins, tumor antigens, etc.)
+
+**Binding Labels:**
+- **ANT_Binding**: Binary classification (0 = no binding, 1 = binding)
+- For datasets with continuous binding affinity values (like delta_g), a cutoff is applied to convert to binary labels
+
+**Data Sources:**
+- **CoV-AbDab**: COVID-19 antibody database with SARS-CoV-2 binding data
+- **BioMap**: Antibody-antigen binding affinity dataset with thermodynamic measurements
+- Additional datasets can be added following the same structure
 
 ### 2. Training the Model
 Once your data is prepared and combined, you can train the AntiBinder model using `main_trainer.py`.

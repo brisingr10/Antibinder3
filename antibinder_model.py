@@ -74,11 +74,26 @@ class Combine_Embedding(nn.Module):
         self.antibody_structure_proj = nn.Linear(64, config.hidden_size)
         self.antigen_structure_proj = nn.Linear(1280, config.hidden_size)
 
+    def _pad_or_truncate(self, tensor, target_length):
+        """Pad or truncate tensor to target length along dimension 1"""
+        current_length = tensor.shape[1]
+        if current_length == target_length:
+            return tensor
+        elif current_length < target_length:
+            # Pad with zeros
+            pad_length = target_length - current_length
+            padding = torch.zeros(tensor.shape[0], pad_length, tensor.shape[2], device=tensor.device, dtype=tensor.dtype)
+            return torch.cat([tensor, padding], dim=1)
+        else:
+            # Truncate
+            return tensor[:, :target_length, :]
+
     def forward(self, heavy_chain, light_chain, antigen):
-        # Move data to GPU
-        for k, v in heavy_chain.items(): heavy_chain[k] = v.cuda()
-        for k, v in light_chain.items(): light_chain[k] = v.cuda()
-        for k, v in antigen.items(): antigen[k] = v.cuda()
+        # Move data to appropriate device (GPU if available, CPU otherwise)
+        device = next(self.parameters()).device
+        for k, v in heavy_chain.items(): heavy_chain[k] = v.to(device)
+        for k, v in light_chain.items(): light_chain[k] = v.to(device)
+        for k, v in antigen.items(): antigen[k] = v.to(device)
 
         # Get sequence embeddings
         heavy_seq_emb = self.heavy_chain_emb(heavy_chain['tokens'], heavy_chain['regions'])
@@ -89,6 +104,11 @@ class Combine_Embedding(nn.Module):
         heavy_structure_emb = self.antibody_structure_proj(heavy_chain['structure'])
         light_structure_emb = self.antibody_structure_proj(light_chain['structure'])
         antigen_structure_emb = self.antigen_structure_proj(antigen['structure'])
+
+        # Pad/truncate structure embeddings to match sequence lengths
+        heavy_structure_emb = self._pad_or_truncate(heavy_structure_emb, self.config.max_position_embeddings)
+        light_structure_emb = self._pad_or_truncate(light_structure_emb, self.config.max_position_embeddings_light)
+        antigen_structure_emb = self._pad_or_truncate(antigen_structure_emb, self.config.max_position_embeddings)
 
         heavy_total_emb = heavy_seq_emb + heavy_structure_emb
         light_total_emb = light_seq_emb + light_structure_emb
@@ -159,20 +179,27 @@ if __name__ == '__main__':
     
     # --- Model ---
     model = AntiBinder(config, latent_dim=32, res=True)
-    model = nn.DataParallel(model).cuda()
-    print("Model created successfully.")
+    
+    # Use GPU if available, otherwise CPU
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+    if torch.cuda.is_available():
+        model = nn.DataParallel(model).to(device)
+        print(f"Model created successfully on {torch.cuda.device_count()} GPU(s).")
+    else:
+        model = model.to(device)
+        print("Model created successfully on CPU.")
 
     # --- Dummy Data ---
     batch_size = 4
     heavy_chain_data = {
-        'tokens': torch.randint(0, 21, (batch_size, config.heavy_chain_max_position_embeddings)),
-        'regions': torch.randint(0, 6, (batch_size, config.max_position_embeddings)),
+        'tokens': torch.randint(0, 21, (batch_size, config.max_position_embeddings)),
+        'regions': torch.randint(0, 7, (batch_size, config.max_position_embeddings)),  # 0-6 for heavy chain
         'structure': torch.rand(batch_size, config.max_position_embeddings, 64)
     }
     light_chain_data = {
         'tokens': torch.randint(0, 21, (batch_size, config.max_position_embeddings_light)),
-        'regions': torch.randint(0, 5, (batch_size, config.max_position_embeddings_light)),
-        'structure': torch.rand(batch_size, config.light_chain_max_position_embeddings, 64)
+        'regions': torch.randint(1, 7, (batch_size, config.max_position_embeddings_light)),  # 1-6 for light chain (0 reserved for padding)
+        'structure': torch.rand(batch_size, config.max_position_embeddings_light, 64)
     }
     antigen_data = {
         'tokens': torch.randint(0, 21, (batch_size, config.max_position_embeddings)),
@@ -182,3 +209,4 @@ if __name__ == '__main__':
     # --- Forward Pass ---
     output = model(heavy_chain_data, light_chain_data, antigen_data)
     print("Forward pass successful, output shape:", output.shape)
+    print(f"Model running on device: {device}")

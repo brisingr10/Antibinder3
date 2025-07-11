@@ -9,6 +9,27 @@ import pandas as pd
 from cfg_ab import AminoAcid_Vocab, configuration
 from igfold import IgFoldRunner
 
+# --- Fix SSL certificate issue on macOS ---
+import ssl
+import certifi
+try:
+    # Try to use certifi certificates for SSL verification
+    ssl._create_default_https_context = ssl._create_unverified_context
+except:
+    pass
+
+# --- Patched torch.load for IgFold compatibility ---
+try:
+    original_torch_load = torch.load
+    def patched_torch_load(*args, **kwargs):
+        # This is a workaround for a breaking change in PyTorch 2.x affecting IgFold.
+        # It forces pickle to be used, which is less secure but necessary for this case.
+        kwargs.setdefault('weights_only', False)
+        return original_torch_load(*args, **kwargs)
+    torch.load = patched_torch_load
+except AttributeError:
+    print("Could not patch torch.load. This might cause issues with IgFold on newer PyTorch versions.")
+
 # --- Setup Paths ---
 PROJECT_ROOT = os.path.dirname(__file__)
 ANTIGEN_ESM_CACHE_DIR = os.path.join(PROJECT_ROOT, 'antigen_esm', 'train')
@@ -120,7 +141,7 @@ class antibody_antigen_dataset(nn.Module):
         vl_seq = "".join([str(data_row[col]) for col in ['L-FR1', 'L-CDR1', 'L-FR2', 'L-CDR2', 'L-FR3', 'L-CDR3', 'L-FR4']])
         vl_structure = self._get_structure_embedding(vl_seq, 'light', self.light_chain_env).squeeze(0)
         vl_token_ids = self._pad_sequence(torch.tensor([AminoAcid_Vocab[aa] for aa in vl_seq]), self.antibody_config.max_position_embeddings_light)
-        vl_region_indices = self._create_region_indices(data_row, 'vl')
+        vl_region_indices = self._create_region_indices(data_row, 'light')
 
         # --- Antigen Sequence to Tokens ---
         antigen_token_ids = self._pad_sequence(torch.tensor([AminoAcid_Vocab[aa] for aa in antigen_seq]), self.antigen_config.max_position_embeddings)
@@ -138,10 +159,13 @@ class antibody_antigen_dataset(nn.Module):
 
 if __name__ == "__main__":
     # Example usage
-    os.environ["CUDA_VISIBLE_DEVICES"] = '0,1'
+    # Set CUDA devices if available (can be overridden by environment variable)
+    if torch.cuda.is_available() and 'CUDA_VISIBLE_DEVICES' not in os.environ:
+        os.environ["CUDA_VISIBLE_DEVICES"] = '0,1'
+    
     antigen_config = configuration()
     antibody_config = configuration()
-    data_path = os.path.join(PROJECT_ROOT, 'datasets', 'combined_training_data.csv')
+    data_path = os.path.join(PROJECT_ROOT, 'datasets', 'training_data.csv')
     
     dataset = antibody_antigen_dataset(
         antigen_config=antigen_config, 

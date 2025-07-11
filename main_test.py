@@ -32,6 +32,8 @@ class Tester:
         self.model = model
         self.dataloader = dataloader
         self.args = args
+        # Set device for consistent tensor operations
+        self.device = torch.device('cuda' if args.cuda else 'cpu')
 
     def _calculate_metrics(self, y_true, y_pred, y_scores):
         y_true = y_true.cpu().numpy()
@@ -59,8 +61,8 @@ class Tester:
                 heavy_chain, light_chain, antigen, labels, indices = \
                     batch['heavy_chain'], batch['light_chain'], batch['antigen'], batch['label'], batch['index']
 
-                if self.args.cuda:
-                    labels = labels.cuda()
+                # Move labels to appropriate device
+                labels = labels.to(self.device)
 
                 scores = self.model(heavy_chain, light_chain, antigen).squeeze()
                 preds = (scores > 0.5).long()
@@ -159,6 +161,9 @@ if __name__ == "__main__":
 
     if args.cuda:
         model = model.cuda()
+        print(f"Model loaded on GPU: {torch.cuda.get_device_name()}")
+    else:
+        print("Model loaded on CPU")
 
     # --- Dataset and Dataloader ---
     dataset = antibody_antigen_dataset(antigen_config=config, antibody_config=config, data_path=args.input_path, test=True)
