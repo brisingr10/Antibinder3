@@ -149,22 +149,47 @@ def custom_collate(batch):
             else:
                 res[key].append(item[key])
 
+    def pad_and_stack_tensors(tensor_list):
+        """Pad tensors to the same size and stack them"""
+        if not tensor_list or not isinstance(tensor_list[0], torch.Tensor):
+            return torch.tensor(tensor_list) if tensor_list else torch.tensor([])
+        
+        # Find the maximum dimensions
+        max_dims = [max(t.size(i) for t in tensor_list) for i in range(tensor_list[0].dim())]
+        
+        # Pad each tensor to match the maximum dimensions
+        padded_tensors = []
+        for tensor in tensor_list:
+            pad_sizes = []
+            for i in range(tensor.dim() - 1, -1, -1):  # padding is specified in reverse order
+                pad_before = 0
+                pad_after = max_dims[i] - tensor.size(i)
+                pad_sizes.extend([pad_before, pad_after])
+            
+            if any(pad_sizes):
+                padded_tensor = torch.nn.functional.pad(tensor, pad_sizes)
+            else:
+                padded_tensor = tensor
+            padded_tensors.append(padded_tensor)
+        
+        return torch.stack(padded_tensors)
+
     for key in keys:
         if isinstance(res[key], dict):
             for sub_key in res[key]:
-                res[key][sub_key] = torch.stack(res[key][sub_key])
+                res[key][sub_key] = pad_and_stack_tensors(res[key][sub_key])
         else:
-            res[key] = torch.stack(res[key]) if isinstance(res[key][0], torch.Tensor) else torch.tensor(res[key])
+            res[key] = pad_and_stack_tensors(res[key])
             
     return res
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train AntiBinder model with heavy and light chains.")
     parser.add_argument('--seed', type=int, default=42)
-    parser.add_argument('--batch_size', type=int, default=32)
+    parser.add_argument('--batch_size', type=int, default=64)
     parser.add_argument('--latent_dim', type=int, default=32)
     parser.add_argument('--epochs', type=int, default=50)
-    parser.add_argument('--lr', type=float, default=1e-4)
+    parser.add_argument('--lr', type=float, default=6e-5)
     parser.add_argument('--model_name', type=str, default='AntiBinderV2')
     parser.add_argument('--no_cuda', action='store_true', help="Disable CUDA training")
     parser.add_argument('--device', type=str, default='0', help="CUDA device ordinal")
@@ -174,6 +199,8 @@ if __name__ == "__main__":
     args.cuda = not args.no_cuda and torch.cuda.is_available()
     if args.cuda:
         os.environ["CUDA_VISIBLE_DEVICES"] = args.device
+        # Enable CUDA debugging for better error messages
+        os.environ["CUDA_LAUNCH_BLOCKING"] = "1"
 
     # --- Setup Directories ---
     base_dir = os.path.dirname(os.path.abspath(__file__))

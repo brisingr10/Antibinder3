@@ -40,7 +40,7 @@ class configuration():
                     ) -> None:
         
         self.AminoAcid_Vocab = AminoAcid_Vocab
-        self.token_size = len(self.AminoAcid_Vocab)
+        self.token_size = len(self.AminoAcid_Vocab) + 1  # +1 for padding token at index 0
         self.residue_size = 21
         self.hidden_size = hidden_size
         self.pad_token_id = 0
