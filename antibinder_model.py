@@ -156,8 +156,8 @@ class AntiBinder(nn.Module):
         self.classifier = nn.Sequential(
             nn.Linear(latent_dim * latent_dim * 2, latent_dim * latent_dim),
             nn.ReLU(),
-            nn.Linear(latent_dim * latent_dim, 1),
-            nn.Sigmoid()
+            nn.Linear(latent_dim * latent_dim, 1)
+            # Removed nn.Sigmoid() - will be handled by BCEWithLogitsLoss
         )
         
         # Initialize weights

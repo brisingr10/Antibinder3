@@ -67,7 +67,9 @@ class Trainer:
             print(f"Warning: Could not apply custom weight initialization: {e}")
 
     def _calculate_metrics(self, predictions, targets):
-        pred_np = (predictions.cpu().detach().numpy() > 0.5).astype(int)
+        # Apply sigmoid since model now outputs raw logits
+        probabilities = torch.sigmoid(predictions)
+        pred_np = (probabilities.cpu().detach().numpy() > 0.5).astype(int)
         target_np = targets.cpu().numpy().astype(int)
         return {
             'accuracy': accuracy_score(target_np, pred_np),
@@ -82,6 +84,7 @@ class Trainer:
         
         total_loss = 0
         all_predictions, all_targets = [], []
+        batch_count = 0
 
         for batch in tqdm(dataloader, desc="Training" if is_train else "Validation"):
             heavy_chain, light_chain, antigen, labels = batch['heavy_chain'], batch['light_chain'], batch['antigen'], batch['label']
@@ -93,22 +96,38 @@ class Trainer:
                 predictions = self.model(heavy_chain, light_chain, antigen)
                 loss = criterion(predictions.squeeze(), labels.float())
 
+                # Debug: Print some statistics for first few batches
+                if batch_count < 3:
+                    print(f"  Batch {batch_count}: pred range [{predictions.min().item():.3f}, {predictions.max().item():.3f}], "
+                          f"loss: {loss.item():.3f}, labels: {labels.cpu().numpy()}")
+
                 if is_train:
                     optimizer.zero_grad()
                     loss.backward()
+                    # Add gradient clipping for training stability
+                    torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
                     optimizer.step()
 
             total_loss += loss.item()
             all_predictions.append(predictions.detach())
             all_targets.append(labels.detach())
+            batch_count += 1
 
         avg_loss = total_loss / len(dataloader)
         metrics = self._calculate_metrics(torch.cat(all_predictions), torch.cat(all_targets))
         return avg_loss, metrics
 
-    def train(self, criterion, epochs):
+    def train(self, criterion, epochs, start_epoch=0):
         optimizer = torch.optim.Adam(self.model.parameters(), lr=self.args.lr)
-        for epoch in range(epochs):
+        
+        # Debug: Print initial model state
+        print(f"Training with learning rate: {self.args.lr}")
+        print(f"Criterion: {criterion}")
+        print(f"Number of trainable parameters: {sum(p.numel() for p in self.model.parameters() if p.requires_grad)}")
+        if start_epoch > 0:
+            print(f"Resuming training from epoch {start_epoch + 1}")
+        
+        for epoch in range(start_epoch, epochs):
             train_loss, train_metrics = self._run_epoch(self.train_dataloader, criterion, optimizer)
             val_loss, val_metrics = self._run_epoch(self.valid_dataloader, criterion)
 
@@ -135,6 +154,24 @@ class Trainer:
         }
         torch.save(checkpoint, model_path)
         print(f"Model saved to {model_path}")
+
+    def load_checkpoint(self, checkpoint_path):
+        """Load model from checkpoint and return the epoch to resume from"""
+        print(f"Loading checkpoint from {checkpoint_path}")
+        checkpoint = torch.load(checkpoint_path, map_location=self.device)
+        
+        # Load model state
+        if isinstance(self.model, nn.DataParallel):
+            self.model.module.load_state_dict(checkpoint['model_state_dict'])
+        else:
+            self.model.load_state_dict(checkpoint['model_state_dict'])
+        
+        # Load training state
+        self.best_val_loss = checkpoint.get('val_loss', float('inf'))
+        epoch = checkpoint.get('epoch', 0)
+        
+        print(f"Resumed from epoch {epoch}, best val loss: {self.best_val_loss:.4f}")
+        return epoch
 
 def custom_collate(batch):
     # This function will properly stack the tensors for each part of the data
@@ -189,11 +226,12 @@ if __name__ == "__main__":
     parser.add_argument('--batch_size', type=int, default=64)
     parser.add_argument('--latent_dim', type=int, default=32)
     parser.add_argument('--epochs', type=int, default=50)
-    parser.add_argument('--lr', type=float, default=6e-5)
-    parser.add_argument('--model_name', type=str, default='AntiBinderV2')
+    parser.add_argument('--lr', type=float, default=1e-4)
+    parser.add_argument('--model_name', type=str, default='AntiBinderV3')
     parser.add_argument('--no_cuda', action='store_true', help="Disable CUDA training")
     parser.add_argument('--device', type=str, default='0', help="CUDA device ordinal")
     parser.add_argument('--data', type=str, default='train')
+    parser.add_argument('--resume', type=str, default=None, help="Path to checkpoint to resume from")
     args = parser.parse_args()
 
     args.cuda = not args.no_cuda and torch.cuda.is_available()
@@ -241,5 +279,12 @@ if __name__ == "__main__":
 
     # --- Start Training ---
     trainer = Trainer(model, train_dataloader, valid_dataloader, args, logger)
-    criterion = nn.BCELoss()
-    trainer.train(criterion, args.epochs)
+    
+    # Check if resuming from checkpoint
+    start_epoch = 0
+    if args.resume:
+        start_epoch = trainer.load_checkpoint(args.resume)
+    
+    # Use BCEWithLogitsLoss - more numerically stable and works with raw logits
+    criterion = nn.BCEWithLogitsLoss()
+    trainer.train(criterion, args.epochs, start_epoch)
