@@ -14,6 +14,7 @@ from sklearn.metrics import (
 
 from antigen_antibody_emb import antibody_antigen_dataset
 from antibinder_model import AntiBinder, configuration
+from process_all_data import run_combined_chain_processing
 
 warnings.filterwarnings("ignore")
 
@@ -65,13 +66,13 @@ class Tester:
                 labels = labels.to(self.device)
 
                 scores = self.model(heavy_chain, light_chain, antigen).squeeze()
-                # Convert logits to probabilities using sigmoid
+                # Apply sigmoid to convert logits to probabilities (0-1 range)
                 probabilities = torch.sigmoid(scores)
                 preds = (probabilities > 0.5).long()
 
                 all_preds.append(preds)
                 all_targets.append(labels)
-                all_scores.append(probabilities)
+                all_scores.append(probabilities)  # Store probabilities instead of raw scores
                 all_indices.append(indices)
 
         # Concatenate all batch results
@@ -115,15 +116,17 @@ def custom_collate(batch):
         if key not in res: continue
         if isinstance(res[key], dict):
             for sub_key in res[key]:
-                if sub_key == 'structure':
-                    # Handle variable-length structure embeddings by padding
-                    max_len = max(tensor.shape[0] for tensor in res[key][sub_key])
+                # Handle variable-length tensors by padding
+                if len(res[key][sub_key]) > 0 and isinstance(res[key][sub_key][0], torch.Tensor):
+                    # Find max length in this batch
+                    max_len = max(tensor.size(0) for tensor in res[key][sub_key])
+                    # Pad all tensors to max length
                     padded_tensors = []
                     for tensor in res[key][sub_key]:
-                        if tensor.shape[0] < max_len:
-                            padding = torch.zeros(max_len - tensor.shape[0], tensor.shape[1])
-                            padded_tensor = torch.cat([tensor, padding], dim=0)
-                            padded_tensors.append(padded_tensor)
+                        if tensor.size(0) < max_len:
+                            pad_size = max_len - tensor.size(0)
+                            padded = torch.nn.functional.pad(tensor, (0, 0, 0, pad_size))
+                            padded_tensors.append(padded)
                         else:
                             padded_tensors.append(tensor)
                     res[key][sub_key] = torch.stack(padded_tensors)
@@ -133,6 +136,100 @@ def custom_collate(batch):
             res[key] = torch.stack(res[key]) if isinstance(res[key][0], torch.Tensor) else torch.tensor(res[key])
             
     return res
+
+def check_data_needs_splitting(df):
+    """
+    Check if the dataframe needs to be split into CDR/FR regions.
+    Returns True if data needs splitting (only has vh, vl, Antigen Sequence)
+    Returns False if data already has CDR/FR regions
+    """
+    required_cdr_fr_columns = [
+        'H-FR1', 'H-CDR1', 'H-FR2', 'H-CDR2', 'H-FR3', 'H-CDR3', 'H-FR4',
+        'L-FR1', 'L-CDR1', 'L-FR2', 'L-CDR2', 'L-FR3', 'L-CDR3', 'L-FR4'
+    ]
+    
+    # Check if all CDR/FR columns are present
+    has_cdr_fr_regions = all(col in df.columns for col in required_cdr_fr_columns)
+    
+    # Check if basic columns are present
+    has_basic_columns = all(col in df.columns for col in ['vh', 'vl', 'Antigen Sequence'])
+    
+    if has_cdr_fr_regions and has_basic_columns:
+        print("✅ Data already contains CDR/FR regions - proceeding with prediction")
+        return False
+    elif has_basic_columns and not has_cdr_fr_regions:
+        print("🔄 Data contains vh/vl sequences but no CDR/FR regions - will automatically split")
+        return True
+    elif has_cdr_fr_regions and not has_basic_columns:
+        print("⚠️  Data has CDR/FR regions but missing basic vh/vl columns - this may cause issues")
+        return False
+    else:
+        missing_cols = []
+        if 'vh' not in df.columns:
+            missing_cols.append('vh')
+        if 'vl' not in df.columns:
+            missing_cols.append('vl')
+        if 'Antigen Sequence' not in df.columns:
+            missing_cols.append('Antigen Sequence')
+        
+        # If we have some CDR/FR columns but not all, list what's missing
+        missing_cdr_fr = [col for col in required_cdr_fr_columns if col not in df.columns]
+        if missing_cdr_fr and len(missing_cdr_fr) < len(required_cdr_fr_columns):
+            print(f"⚠️  Partial CDR/FR data detected. Missing CDR/FR columns: {missing_cdr_fr}")
+            print("    Will attempt to process from vh/vl sequences if available...")
+            if has_basic_columns:
+                return True
+        
+        raise ValueError(f"Input data is missing required columns: {missing_cols + missing_cdr_fr}")
+
+def process_antibody_data(input_path, scheme="chothia"):
+    """
+    Process antibody data by splitting into CDR/FR regions if needed.
+    Returns the path to the processed data (either original or newly created).
+    """
+    print(f"📂 Loading input data from: {input_path}")
+    
+    # Load the input data to check its structure
+    try:
+        df = pd.read_csv(input_path)
+        print(f"📊 Loaded {len(df)} rows with columns: {list(df.columns)}")
+    except Exception as e:
+        print(f"❌ Error loading input file: {str(e)}")
+        sys.exit(1)
+    
+    # Check if data needs splitting
+    if not check_data_needs_splitting(df):
+        # Data already has CDR/FR regions, return original path
+        print(f"📄 Using original data file: {input_path}")
+        return input_path
+    
+    # Data needs splitting - create processed version
+    print(f"🔧 Processing {len(df)} antibody sequences using {scheme} numbering scheme...")
+    
+    # Create temporary processed file path
+    base_name = os.path.splitext(os.path.basename(input_path))[0]
+    temp_dir = os.path.join(os.path.dirname(input_path), 'temp_processed')
+    os.makedirs(temp_dir, exist_ok=True)
+    processed_path = os.path.join(temp_dir, f"{base_name}_processed.csv")
+    
+    try:
+        # Use the existing professional processing function
+        run_combined_chain_processing(df, processed_path, scheme)
+        
+        print(f"✅ Successfully processed antibody sequences!")
+        print(f"📄 Processed data saved to: {processed_path}")
+        print("   Heavy chain regions: H-FR1, H-CDR1, H-FR2, H-CDR2, H-FR3, H-CDR3, H-FR4")
+        print("   Light chain regions: L-FR1, L-CDR1, L-FR2, L-CDR2, L-FR3, L-CDR3, L-FR4")
+        
+        return processed_path
+        
+    except Exception as e:
+        print(f"❌ Error during antibody sequence processing: {str(e)}")
+        print("\nCommon issues:")
+        print("- Make sure your CSV has 'vh', 'vl', and 'Antigen Sequence' columns")
+        print("- Ensure ANARCI/abnumber is properly installed")
+        print("- Check that the antibody sequences are valid protein sequences")
+        sys.exit(1)
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Test AntiBinder model.')
@@ -180,8 +277,12 @@ if __name__ == "__main__":
     else:
         print("Model loaded on CPU")
 
+    # --- Process input data (split into CDR/FR regions if needed) ---
+    print("🔍 Checking input data format...")
+    processed_data_path = process_antibody_data(args.input_path)
+    
     # --- Dataset and Dataloader ---
-    dataset = antibody_antigen_dataset(antigen_config=config, antibody_config=config, data_path=args.input_path, test=True)
+    dataset = antibody_antigen_dataset(antigen_config=config, antibody_config=config, data_path=processed_data_path, test=True)
     dataloader = DataLoader(dataset, shuffle=False, batch_size=args.batch_size, collate_fn=custom_collate)
 
     # --- Run Testing ---

@@ -1,94 +1,85 @@
-# AntiBinder3
-AntiBinder3: A sequence-structure hybrid model based on bidirectional cross-attention mechanism for predicting antibody-antigen binding relationships. This version supports both **Heavy Chain (VH)** and **Light Chain (VL)** data for enhanced prediction accuracy.
+# AntiBinder
+AntiBinder: 항체-항원 결합 관계를 예측하기 위한 양방향 교차 주의 메커니즘 기반 서열-구조 하이브리드 모델. 이 버전은 예측 정확도 향상을 위해 **중쇄(VH)**와 **경쇄(VL)** 데이터를 모두 지원합니다.
 
 ![framework](./figures/model_all.png)
 
-## Introduction
-This project predicts antigen-antibody binding affinity for protein sequences. The model can be trained and used based on sequence data, leveraging both VH and VL regions of antibodies for comprehensive binding prediction. The model combines:
-- **Sequence embeddings** using ESM-2 for antigens and tokenized sequences for antibodies
-- **Structure embeddings** using IgFold for antibody chains
-- **Bidirectional cross-attention** between antibody and antigen representations
+## 소개
+이 프로젝트는 단백질 유형에 대한 항원-항체 친화도를 예측하는 데 사용됩니다. 이 모델은 서열 데이터만으로도 훈련되고 사용될 수 있습니다. 내부 모듈들을 스택할 수 있어 모델의 매개변수를 크게 늘릴 수 있으며, 플러그 앤 플레이 효과를 달성할 수 있도록 훈련할 수 있습니다. 업데이트된 모델은 더 포괄적인 결합 예측을 위해 항체의 VH와 VL 영역을 모두 활용합니다.
 
-## Key Features
-- ✅ **Dual-chain antibody modeling** (Heavy + Light chains)
-- ✅ **Professional antibody region splitting** using ANARCI/abnumber
-- ✅ **Structure-aware embeddings** with IgFold
-- ✅ **Efficient caching** with LMDB for embeddings
-- ✅ **GPU acceleration** with CUDA support
-- ✅ **Proper probability outputs** with sigmoid activation
+## 의존성
+python 3.11
 
-## Dependencies
-- Python 3.11
-- PyTorch (with CUDA support recommended)
-- ESM-2 (protein language model)
-- IgFold (antibody structure prediction)
-- ANARCI/abnumber (antibody numbering)
+## 설치 가이드
+프로젝트를 설치하고 설정하는 방법에 대한 자세한 지침:
 
-## Installation Guide
-
-### Clone the repository
+### 저장소 복제
 ```bash
 git clone https://github.com/brisingr10/Antibinder3.git
-cd Antibinder3
 ```
 
-### Install dependencies
+### 의존성 설치
 ```bash
 pip install -r requirements.txt
 ```
 
-## Usage Instructions
+## 사용 지침
 
-### 1. Data Preparation
-Your raw antibody-antigen binding data needs to be processed to extract CDR/FR regions and prepare for training.
+### 1. 데이터 준비
+훈련이나 예측 전에, raw 항체-항원 결합 데이터를 처리하여 관련 영역을 추출하고 단일 데이터셋으로 결합해야 합니다.
 
-#### Option A: Use Existing Processing Pipeline
-For standard datasets (CoV-AbDab, BioMap, etc.):
+**단계:**
 
-```bash
-python process_all_data.py
-```
+1.  **Raw 데이터 처리:**
+    `process_all_data.py`를 사용하여 다음을 포함한 모든 필요한 데이터 전처리를 수행합니다:
+    *   `datasets/raw_data/`에서 raw 데이터 읽기.
+    *   알려진 데이터셋에 대한 내부 구성을 기반으로 열 이름 변경 (예: `Heavy`를 `vh`로, `Light`를 `vl`로, `antigen`을 `Antigen Sequence`로, `Label`을 `ANT_Binding`으로).
+    *   VH와 VL 서열을 각각의 프레임워크(FR)와 CDR 세그먼트(H-FR1, H-CDR1 등, L-FR1, L-CDR1 등)로 단일 결합 파일에서 분할.
+    *   모든 처리된 데이터 파일을 단일 데이터셋으로 결합.
+    *   데이터 검증 수행 (VH 또는 VL 서열이 누락된 행과 중복 제거).
+    *   결합된 데이터를 훈련과 검증을 위한 `training_data.csv`와 `test_data.csv`로 분할.
 
-This script:
-- Reads raw data from `datasets/raw_data/`
-- Splits antibody sequences into CDR/FR regions using professional tools
-- Combines all processed data into training/test sets
-- Outputs: `datasets/training_data.csv` and `datasets/test_data.csv`
+    `datasets/raw_data/`의 raw 데이터 CSV 파일에 `process_all_data.py`에서 예상하는 VH, VL, 항원 서열, 결합 라벨에 대한 필요한 열이 포함되어 있는지 확인하세요 (각 데이터셋에 대한 특정 열 매핑은 스크립트의 `if __name__ == "__main__":` 블록을 참조).
 
-#### Option B: Process Your Own Data
-For custom datasets with `vh`, `vl`, and `Antigen Sequence` columns:
+    ```bash
+    python process_all_data.py
+    # 이 스크립트는 datasets/raw_data/에서 읽어와서 datasets/process_data/에 처리된 파일을 생성하고,
+    # 최종 training_data.csv와 test_data.csv를 datasets/ 디렉터리에 저장합니다.
+    ```
 
-```bash
-python use_existing_splitter.py
-```
-
-Modify the script to point to your input file. This will split the antibody sequences into proper CDR/FR regions.
+    **출력 데이터 구조:**
+    `training_data.csv`와 `test_data.csv` 파일은 다음 열들을 포함합니다:
+    `vh`, `vl`, `Antigen Sequence`,
+    `H-FR1`, `H-CDR1`, `H-FR2`, `H-CDR2`, `H-FR3`, `H-CDR3`, `H-FR4`,
+    `L-FR1`, `L-CDR1`, `L-FR2`, `L-CDR2`, `L-FR3`, `L-CDR3`, `L-FR4`,
     `ANT_Binding`
 
-### Data Structure Details
+### 데이터 구조 세부사항
 
-The processed data consists of antibody-antigen binding pairs with the following structure:
+훈련 데이터는 다음 주요 구성 요소를 가진 항체-항원 결합 쌍으로 구성됩니다:
 
-**Required Columns:**
-- `vh`: Heavy chain sequence
-- `vl`: Light chain sequence  
-- `Antigen Sequence`: Target protein sequence
-- `H-FR1`, `H-CDR1`, `H-FR2`, `H-CDR2`, `H-FR3`, `H-CDR3`, `H-FR4`: Heavy chain regions
-- `L-FR1`, `L-CDR1`, `L-FR2`, `L-CDR2`, `L-FR3`, `L-CDR3`, `L-FR4`: Light chain regions
-- `ANT_Binding`: Binary binding label (0 = no binding, 1 = binding)
+**항체 구조:**
+- **VH**: 완전한 VH 서열을 포함
+- **VL**: 완전한 VL 서열을 포함  
+- **CDR/FR 영역**: 각 체인은 7개 영역으로 분할됩니다:
+  - 프레임워크 영역 (FR1, FR2, FR3, FR4): 구조적 골격 영역
+  - CDR (CDR1, CDR2, CDR3): 항원 결합 영역
+  - CDR3는 일반적으로 가장 가변적이며 결합 특이성에 중요합니다
 
-**Antibody Regions:**
-- **Framework Regions (FR1-4)**: Structural scaffold regions
-- **Complementarity Determining Regions (CDR1-3)**: Antigen-binding regions
-- **CDR3**: Most variable and critical for binding specificity
+**항원 구조:**
+- **항원 서열**: 표적 단백질의 완전한 아미노산 서열
+- 다양한 소스에서 나올 수 있습니다 (바이러스 단백질, 종양 항원 등)
 
-**Data Sources Supported:**
-- CoV-AbDab: COVID-19 antibody database
-- BioMap: Binding affinity measurements
-- Custom datasets following the same format
+**결합 라벨:**
+- **ANT_Binding**: 이진 분류 (0 = 결합 안 함, 1 = 결합)
+- 연속적인 결합 친화도 값을 가진 데이터셋(delta_g 등)의 경우, 이진 라벨로 변환하기 위해 임계값이 적용됩니다
 
-### 2. Training the Model
-Train the AntiBinder model using your processed data:
+**데이터 소스:**
+- **CoV-AbDab**: SARS-CoV-2 결합 데이터를 가진 COVID-19 항체 데이터베이스
+- **BioMap**: 열역학적 측정을 가진 항체-항원 결합 친화도 데이터셋
+- 동일한 구조를 따라 추가 데이터셋을 추가할 수 있습니다
+
+### 2. 모델 훈련
+데이터가 준비되고 결합되면, `main_trainer.py`를 사용하여 AntiBinder 모델을 훈련할 수 있습니다.
 
 ```bash
 python main_trainer.py \
@@ -96,115 +87,51 @@ python main_trainer.py \
     --latent_dim 32 \
     --epochs 50 \
     --lr 1e-4 \
-    --model_name AntiBinderV3 \
-    --device 0
+    --model_name AntiBinderV2 \
+    --device 0 # 사용 가능한 경우 CUDA 디바이스 지정, 예: 0, 1 등.
 
-# Optional arguments:
-# --no_cuda: Use CPU instead of GPU
-# --seed: Random seed for reproducibility (default: 42)
+# 기타 선택적 인수들:
+# --no_cuda: CUDA 훈련 비활성화 (CPU 사용)
+# --seed: 재현성을 위한 랜덤 시드 (기본값: 42)
 ```
 
-**Training Features:**
-- Automatic model checkpointing
-- Validation loss monitoring
-- CUDA acceleration
-- Mixed precision training support
+*   **구성:** 모델 매개변수와 아키텍처 구성 (예: VH와 VL에 대한 `max_position_embeddings`, 영역 유형 인덱싱)은 `cfg_ab.py`에 정의되어 있습니다.
+*   **데이터 로딩 & 임베딩:** `antigen_antibody_emb.py` 스크립트는 결합된 데이터 로딩, 항원에 대한 ESM 임베딩 생성, 항체 체인에 대한 IgFold 구조 임베딩을 처리합니다. 또한 효율적인 데이터 검색을 위한 LMDB 캐시도 관리합니다.
 
-### 3. Making Predictions
-Use a trained model to predict antibody-antigen binding:
+### 3. 모델로 예측하기
+훈련된 모델을 사용하여 예측을 수행하려면 `main_test.py`를 사용하세요. 스크립트는 자동으로 데이터 전처리를 처리하며, 다음 중 하나를 제공할 수 있습니다:
+- **Raw 데이터**: `vh`, `vl`, `Antigen Sequence` 열만 있는 CSV (자동으로 CDR/FR 영역으로 분할됩니다)
+- **전처리된 데이터**: 이미 CDR/FR 영역을 포함하는 CSV
 
 ```bash
 python main_test.py \
-    --input_path "predictions/your_data.csv" \
-    --checkpoint_path "ckpts/AntiBinderV3_epoch31_valloss0.4168.pth" \
+    --input_path "path/to/your/prediction_data.csv" \
+    --checkpoint_path "path/to/your/trained_model.pth" \
     --batch_size 64
 
-# Optional arguments:
-# --no_cuda: Use CPU instead of GPU
-# --latent_dim: Model latent dimension (default: 32)
-# --seed: Random seed (default: 42)
+# 기타 선택적 인수들:
+# --no_cuda: CUDA 비활성화 (CPU 사용)
+# --seed: 재현성을 위한 랜덤 시드 (기본값: 42)
 ```
 
-**Input Requirements:**
-- CSV file with `vh`, `vl`, and `Antigen Sequence` columns
-- CDR/FR regions will be automatically extracted if not present
-- No binding labels required for prediction
+**지원되는 입력 데이터 형식:**
 
-**Output:**
-- Results saved to `predictions/output/[filename]_results.csv`
-- Includes `predicted_probability` (0-1) and `predicted_label` (0/1)
-- Performance metrics displayed if ground truth available
+*옵션 A - Raw 서열 (새 사용자에게 권장):*
+- 필요한 열: `vh`, `vl`, `Antigen Sequence`
+- 스크립트가 ANARCI/abnumber를 사용하여 항체 서열을 CDR/FR 영역으로 자동 분할합니다
+- 임시 처리된 파일들이 `temp_processed/` 디렉터리에 생성됩니다
 
-### 4. Processing New Antibody Data
-To split new antibody sequences into CDR/FR regions:
+*옵션 B - 전처리된 데이터:*
+- 필요한 열: `vh`, `vl`, `Antigen Sequence` 및 모든 CDR/FR 영역
+- CDR/FR 열: `H-FR1`, `H-CDR1`, `H-FR2`, `H-CDR2`, `H-FR3`, `H-CDR3`, `H-FR4`, `L-FR1`, `L-CDR1`, `L-FR2`, `L-CDR2`, `L-FR3`, `L-CDR3`, `L-FR4`
 
-```bash
-python use_existing_splitter.py
-```
+**출력:** 스크립트는 `predictions/output/` 디렉터리에 새 CSV 파일을 생성하며, 입력 파일명에 `_results.csv`를 추가합니다. 이 파일에는 `predicted_probability`와 `predicted_label` 열이 포함됩니다.
 
-Edit the script to specify your input file. This uses the same professional antibody annotation tools (ANARCI/abnumber) as the training pipeline.
+## 모델 아키텍처
+핵심 모델 아키텍처는 `antibinder_model.py`에 정의되어 있으며, 다음을 포함합니다:
+*   `Combine_Embedding`: VH와 VL 모두에 대한 서열과 구조 임베딩의 결합을 처리합니다.
+*   `BiCrossAttentionBlock`: 항체(결합된 VH+VL)와 항원 임베딩 간의 양방향 교차 주의 메커니즘을 구현합니다.
+*   `AntiBinder`: 임베딩 결합, 교차 주의, 최종 분류 레이어를 조율하는 메인 모델 클래스입니다.
 
-## Model Architecture
-The model architecture (`antibinder_model.py`) consists of:
-
-**Core Components:**
-- `Combine_Embedding`: Integrates sequence and structure embeddings for antibody chains
-- `BiCrossAttentionBlock`: Bidirectional cross-attention between antibody and antigen
-- `AntiBinder`: Main model orchestrating all components
-
-**Key Features:**
-- **Multi-modal embeddings**: Combines sequence tokens with structure information
-- **Attention mechanisms**: Bidirectional cross-attention for antibody-antigen interaction
-- **Residual connections**: Enhanced gradient flow and training stability
-- **Proper output activation**: Sigmoid for probability outputs (0-1 range)
-
-## File Structure
-```
-AntiBinder3/
-├── main_trainer.py          # Training script
-├── main_test.py             # Prediction script  
-├── process_all_data.py      # Data preprocessing pipeline
-├── use_existing_splitter.py # Custom data processing
-├── antibinder_model.py      # Model architecture
-├── antigen_antibody_emb.py  # Data loading and embedding
-├── cfg_ab.py               # Configuration parameters
-├── datasets/               # Training and test data
-├── ckpts/                  # Model checkpoints
-├── predictions/            # Prediction inputs/outputs
-└── figures/                # Architecture diagrams
-```
-
-## Performance
-The model achieves competitive performance on antibody-antigen binding prediction:
-- Trained on combined datasets (CoV-AbDab, BioMap)
-- Validates on held-out test sets
-- Metrics: ROC-AUC, Precision, Recall, F1-score
-- Proper probability calibration with sigmoid outputs
-
-## Cache Management
-Embeddings are cached using LMDB for efficiency:
-- **Antigen embeddings**: `antigen_esm/` (ESM-2 representations)
-- **Antibody structures**: `datasets/fold_emb/` (IgFold embeddings)
-- **Automatic caching**: First run processes, subsequent runs load from cache
-
-## Troubleshooting
-
-### Common Issues
-1. **Missing CDR/FR regions**: Use `use_existing_splitter.py` to process sequences
-2. **CUDA out of memory**: Reduce `batch_size` or use `--no_cuda`
-3. **Probability > 1 or < 0**: Fixed in latest version with proper sigmoid activation
-4. **Missing dependencies**: Ensure all packages in `requirements.txt` are installed
-
-### GPU Requirements
-- Recommended: NVIDIA GPU with 8GB+ VRAM
-- CPU training supported but slower
-- Mixed precision training for memory efficiency
-
-## Citation
-If you use AntiBinder3 in your research, please cite:
-```
-[Citation information to be added]
-```
-
-## License
-[License information to be added]
+## 캐시 관리
+ESM과 IgFold 임베딩은 더 빠른 후속 실행을 위해 LMDB를 사용하여 캐시됩니다. VH 구조, VL 구조, 항원 ESM 임베딩에 대해 별도의 캐시 디렉터리가 각각 `datasets/fold_emb/`와 `antigen_esm/` 디렉터리 내에서 유지됩니다.

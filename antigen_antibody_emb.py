@@ -47,7 +47,7 @@ class antibody_antigen_dataset(nn.Module):
         super().__init__()
         self.antigen_config = antigen_config
         self.antibody_config = antibody_config
-        self.test = test
+        self.test = test  # Store test flag for use in __getitem__
 
         # --- Load Data ---
         if isinstance(data, pd.DataFrame):
@@ -118,9 +118,9 @@ class antibody_antigen_dataset(nn.Module):
     def __getitem__(self, index):
         data_row = self.data.iloc[index]
         
-        # Handle labels - use dummy label if in test mode and ANT_Binding column doesn't exist
-        if self.test and 'ANT_Binding' not in self.data.columns:
-            label = torch.tensor(0)  # dummy label for test mode
+        # Handle label - use dummy label for test mode when ANT_Binding doesn't exist
+        if self.test and 'ANT_Binding' not in data_row:
+            label = torch.tensor(0)  # Dummy label for test mode
         else:
             label = torch.tensor(data_row['ANT_Binding'])
 
@@ -139,17 +139,23 @@ class antibody_antigen_dataset(nn.Module):
 
         # --- Heavy Chain Processing ---
         vh_seq = "".join([str(data_row[col]) for col in ['H-FR1', 'H-CDR1', 'H-FR2', 'H-CDR2', 'H-FR3', 'H-CDR3', 'H-FR4']])
+        vh_seq = vh_seq.upper().replace('O', 'X')  # Handle non-standard amino acids
+        vh_seq = ''.join([aa if aa in AminoAcid_Vocab else 'X' for aa in vh_seq])  # Replace unknown AA with X
         vh_structure = self._get_structure_embedding(vh_seq, 'heavy', self.heavy_chain_env).squeeze(0)
         vh_token_ids = self._pad_sequence(torch.tensor([AminoAcid_Vocab[aa] for aa in vh_seq]), self.antibody_config.max_position_embeddings)
         vh_region_indices = self._create_region_indices(data_row, 'heavy')
 
         # --- Light Chain Processing ---
         vl_seq = "".join([str(data_row[col]) for col in ['L-FR1', 'L-CDR1', 'L-FR2', 'L-CDR2', 'L-FR3', 'L-CDR3', 'L-FR4']])
+        vl_seq = vl_seq.upper().replace('O', 'X')  # Handle non-standard amino acids
+        vl_seq = ''.join([aa if aa in AminoAcid_Vocab else 'X' for aa in vl_seq])  # Replace unknown AA with X
         vl_structure = self._get_structure_embedding(vl_seq, 'light', self.light_chain_env).squeeze(0)
         vl_token_ids = self._pad_sequence(torch.tensor([AminoAcid_Vocab[aa] for aa in vl_seq]), self.antibody_config.max_position_embeddings_light)
         vl_region_indices = self._create_region_indices(data_row, 'light')
 
         # --- Antigen Sequence to Tokens ---
+        antigen_seq = str(data_row['Antigen Sequence']).upper().replace('O', 'X')  # Handle non-standard amino acids
+        antigen_seq = ''.join([aa if aa in AminoAcid_Vocab else 'X' for aa in antigen_seq])  # Replace unknown AA with X
         antigen_token_ids = self._pad_sequence(torch.tensor([AminoAcid_Vocab[aa] for aa in antigen_seq]), self.antigen_config.max_position_embeddings)
 
         return {
