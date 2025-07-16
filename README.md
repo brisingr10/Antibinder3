@@ -1,81 +1,94 @@
-# AntiBinder
-AntiBinder: a sequence-structure hybrid model based on bidirectional cross-attention mechanism for predicting antibody-antigen binding relationships. This version now supports both **Heavy Chain (VH)** and **Light Chain (VL)** data for enhanced prediction accuracy.
+# AntiBinder3
+AntiBinder3: A sequence-structure hybrid model based on bidirectional cross-attention mechanism for predicting antibody-antigen binding relationships. This version supports both **Heavy Chain (VH)** and **Light Chain (VL)** data for enhanced prediction accuracy.
 
 ![framework](./figures/model_all.png)
 
 ## Introduction
-This project is used for predicting antigen-antibody affinity for protein types. The model can be trained and used based solely on sequence data. You can also stack the modules within, making the model's parameters significantly larger, and train it to achieve a plug-and-play effect. The updated model now leverages both VH and VL regions of antibodies for more comprehensive binding prediction.
+This project predicts antigen-antibody binding affinity for protein sequences. The model can be trained and used based on sequence data, leveraging both VH and VL regions of antibodies for comprehensive binding prediction. The model combines:
+- **Sequence embeddings** using ESM-2 for antigens and tokenized sequences for antibodies
+- **Structure embeddings** using IgFold for antibody chains
+- **Bidirectional cross-attention** between antibody and antigen representations
+
+## Key Features
+- ✅ **Dual-chain antibody modeling** (Heavy + Light chains)
+- ✅ **Professional antibody region splitting** using ANARCI/abnumber
+- ✅ **Structure-aware embeddings** with IgFold
+- ✅ **Efficient caching** with LMDB for embeddings
+- ✅ **GPU acceleration** with CUDA support
+- ✅ **Proper probability outputs** with sigmoid activation
 
 ## Dependencies
-python 3.11
+- Python 3.11
+- PyTorch (with CUDA support recommended)
+- ESM-2 (protein language model)
+- IgFold (antibody structure prediction)
+- ANARCI/abnumber (antibody numbering)
 
 ## Installation Guide
-Detailed instructions on how to install and set up the project:
 
 ### Clone the repository
+```bash
 git clone https://github.com/brisingr10/Antibinder3.git
+cd Antibinder3
+```
 
 ### Install dependencies
+```bash
 pip install -r requirements.txt
+```
 
 ## Usage Instructions
 
 ### 1. Data Preparation
-Before training or prediction, your raw antibody-antigen binding data needs to be processed to extract relevant regions and combine them into a single dataset.
+Your raw antibody-antigen binding data needs to be processed to extract CDR/FR regions and prepare for training.
 
-**Steps:**
+#### Option A: Use Existing Processing Pipeline
+For standard datasets (CoV-AbDab, BioMap, etc.):
 
-1.  **Process Raw Data:**
-    Use `process_all_data.py` to perform all necessary data preprocessing, including:
-    *   Reading raw data from `datasets/raw_data/`.
-    *   Renaming columns (e.g., `Heavy` to `vh`, `Light` to `vl`, `antigen` to `Antigen Sequence`, `Label` to `ANT_Binding`) based on internal configuration for known datasets.
-    *   Splitting Heavy Chain (VH) and Light Chain (VL) sequences into their respective Framework (FR) and Complementarity Determining Region (CDR) segments (H-FR1, H-CDR1, etc., and L-FR1, L-CDR1, etc.) in a single combined file.
-    *   Combining all processed data files into a single dataset.
-    *   Performing data validation (dropping rows with missing VH or VL sequences and duplicates).
-    *   Splitting the combined data into `training_data.csv` and `test_data.csv` for training and validation.
+```bash
+python process_all_data.py
+```
 
-    Ensure your raw data CSV files in `datasets/raw_data/` contain the necessary columns for heavy chain, light chain, antigen sequence, and binding labels, as expected by `process_all_data.py` (refer to the script's `if __name__ == "__main__":` block for specific column mappings for each dataset).
+This script:
+- Reads raw data from `datasets/raw_data/`
+- Splits antibody sequences into CDR/FR regions using professional tools
+- Combines all processed data into training/test sets
+- Outputs: `datasets/training_data.csv` and `datasets/test_data.csv`
 
-    ```bash
-    python process_all_data.py
-    # This script reads from datasets/raw_data/, creates processed files in datasets/process_data/,
-    # and saves the final training_data.csv and test_data.csv to the datasets/ directory.
-    ```
+#### Option B: Process Your Own Data
+For custom datasets with `vh`, `vl`, and `Antigen Sequence` columns:
 
-    **Output Data Structure:**
-    The `training_data.csv` and `test_data.csv` files will contain the following columns:
-    `vh`, `vl`, `Antigen Sequence`,
-    `H-FR1`, `H-CDR1`, `H-FR2`, `H-CDR2`, `H-FR3`, `H-CDR3`, `H-FR4`,
-    `L-FR1`, `L-CDR1`, `L-FR2`, `L-CDR2`, `L-FR3`, `L-CDR3`, `L-FR4`,
+```bash
+python use_existing_splitter.py
+```
+
+Modify the script to point to your input file. This will split the antibody sequences into proper CDR/FR regions.
     `ANT_Binding`
 
 ### Data Structure Details
 
-The training data consists of antibody-antigen binding pairs with the following key components:
+The processed data consists of antibody-antigen binding pairs with the following structure:
 
-**Antibody Structure:**
-- **Heavy Chain (VH)**: Contains the complete heavy chain sequence
-- **Light Chain (VL)**: Contains the complete light chain sequence  
-- **CDR/FR Regions**: Each chain is split into 7 regions:
-  - Framework regions (FR1, FR2, FR3, FR4): Structural scaffold regions
-  - Complementarity Determining Regions (CDR1, CDR2, CDR3): Antigen-binding regions
-  - CDR3 is typically the most variable and important for binding specificity
+**Required Columns:**
+- `vh`: Heavy chain sequence
+- `vl`: Light chain sequence  
+- `Antigen Sequence`: Target protein sequence
+- `H-FR1`, `H-CDR1`, `H-FR2`, `H-CDR2`, `H-FR3`, `H-CDR3`, `H-FR4`: Heavy chain regions
+- `L-FR1`, `L-CDR1`, `L-FR2`, `L-CDR2`, `L-FR3`, `L-CDR3`, `L-FR4`: Light chain regions
+- `ANT_Binding`: Binary binding label (0 = no binding, 1 = binding)
 
-**Antigen Structure:**
-- **Antigen Sequence**: Complete amino acid sequence of the target protein
-- Can be from various sources (viral proteins, tumor antigens, etc.)
+**Antibody Regions:**
+- **Framework Regions (FR1-4)**: Structural scaffold regions
+- **Complementarity Determining Regions (CDR1-3)**: Antigen-binding regions
+- **CDR3**: Most variable and critical for binding specificity
 
-**Binding Labels:**
-- **ANT_Binding**: Binary classification (0 = no binding, 1 = binding)
-- For datasets with continuous binding affinity values (like delta_g), a cutoff is applied to convert to binary labels
-
-**Data Sources:**
-- **CoV-AbDab**: COVID-19 antibody database with SARS-CoV-2 binding data
-- **BioMap**: Antibody-antigen binding affinity dataset with thermodynamic measurements
-- Additional datasets can be added following the same structure
+**Data Sources Supported:**
+- CoV-AbDab: COVID-19 antibody database
+- BioMap: Binding affinity measurements
+- Custom datasets following the same format
 
 ### 2. Training the Model
-Once your data is prepared and combined, you can train the AntiBinder model using `main_trainer.py`.
+Train the AntiBinder model using your processed data:
 
 ```bash
 python main_trainer.py \
@@ -83,39 +96,115 @@ python main_trainer.py \
     --latent_dim 32 \
     --epochs 50 \
     --lr 1e-4 \
-    --model_name AntiBinderV2 \
-    --device 0 # Specify CUDA device if available, e.g., 0, 1, etc.
+    --model_name AntiBinderV3 \
+    --device 0
 
-# Other optional arguments:
-# --no_cuda: Disable CUDA training (use CPU)
+# Optional arguments:
+# --no_cuda: Use CPU instead of GPU
 # --seed: Random seed for reproducibility (default: 42)
 ```
 
-*   **Configuration:** Model parameters and architecture configurations (e.g., `max_position_embeddings` for heavy and light chains, region type indexing) are defined in `cfg_ab.py`.
-*   **Data Loading & Embedding:** The `antigen_antibody_emb.py` script handles loading the combined data, generating ESM embeddings for antigens, and IgFold structure embeddings for antibody chains. It also manages LMDB caches for efficient data retrieval.
+**Training Features:**
+- Automatic model checkpointing
+- Validation loss monitoring
+- CUDA acceleration
+- Mixed precision training support
 
-### 3. Predicting with the Model
-To make predictions using a trained model, use `main_test.py`.
+### 3. Making Predictions
+Use a trained model to predict antibody-antigen binding:
 
 ```bash
 python main_test.py \
-    --input_path "path/to/your/prediction_data.csv" \
-    --checkpoint_path "path/to/your/trained_model.pth" \
+    --input_path "predictions/your_data.csv" \
+    --checkpoint_path "ckpts/AntiBinderV3_epoch31_valloss0.4168.pth" \
     --batch_size 64
 
-# Other optional arguments:
-# --no_cuda: Disable CUDA (use CPU)
-# --seed: Random seed for reproducibility (default: 42)
+# Optional arguments:
+# --no_cuda: Use CPU instead of GPU
+# --latent_dim: Model latent dimension (default: 32)
+# --seed: Random seed (default: 42)
 ```
 
-*   **Input Data for Prediction:** The `--input_path` should point to a CSV file containing `vh`, `vl`, and `Antigen Sequence` columns, processed in the same way as the training data (i.e., split into FR/CDR regions using `heavy_chain_split.py` and `light_chain_split.py`). The `ANT_Binding` column is not strictly required for prediction, but the script expects the same data structure.
-*   **Output:** The script will generate a new CSV file in the `predictions/output/` directory, appending `_results.csv` to the input filename. This file will include `predicted_probability` and `predicted_label` columns.
+**Input Requirements:**
+- CSV file with `vh`, `vl`, and `Antigen Sequence` columns
+- CDR/FR regions will be automatically extracted if not present
+- No binding labels required for prediction
+
+**Output:**
+- Results saved to `predictions/output/[filename]_results.csv`
+- Includes `predicted_probability` (0-1) and `predicted_label` (0/1)
+- Performance metrics displayed if ground truth available
+
+### 4. Processing New Antibody Data
+To split new antibody sequences into CDR/FR regions:
+
+```bash
+python use_existing_splitter.py
+```
+
+Edit the script to specify your input file. This uses the same professional antibody annotation tools (ANARCI/abnumber) as the training pipeline.
 
 ## Model Architecture
-The core model architecture is defined in `antibinder_model.py`, which includes:
-*   `Combine_Embedding`: Handles the combination of sequence and structure embeddings for both heavy and light chains.
-*   `BiCrossAttentionBlock`: Implements the bidirectional cross-attention mechanism between antibody (combined VH+VL) and antigen embeddings.
-*   `AntiBinder`: The main model class that orchestrates the embedding combination, cross-attention, and final classification layers.
+The model architecture (`antibinder_model.py`) consists of:
+
+**Core Components:**
+- `Combine_Embedding`: Integrates sequence and structure embeddings for antibody chains
+- `BiCrossAttentionBlock`: Bidirectional cross-attention between antibody and antigen
+- `AntiBinder`: Main model orchestrating all components
+
+**Key Features:**
+- **Multi-modal embeddings**: Combines sequence tokens with structure information
+- **Attention mechanisms**: Bidirectional cross-attention for antibody-antigen interaction
+- **Residual connections**: Enhanced gradient flow and training stability
+- **Proper output activation**: Sigmoid for probability outputs (0-1 range)
+
+## File Structure
+```
+AntiBinder3/
+├── main_trainer.py          # Training script
+├── main_test.py             # Prediction script  
+├── process_all_data.py      # Data preprocessing pipeline
+├── use_existing_splitter.py # Custom data processing
+├── antibinder_model.py      # Model architecture
+├── antigen_antibody_emb.py  # Data loading and embedding
+├── cfg_ab.py               # Configuration parameters
+├── datasets/               # Training and test data
+├── ckpts/                  # Model checkpoints
+├── predictions/            # Prediction inputs/outputs
+└── figures/                # Architecture diagrams
+```
+
+## Performance
+The model achieves competitive performance on antibody-antigen binding prediction:
+- Trained on combined datasets (CoV-AbDab, BioMap)
+- Validates on held-out test sets
+- Metrics: ROC-AUC, Precision, Recall, F1-score
+- Proper probability calibration with sigmoid outputs
 
 ## Cache Management
-ESM and IgFold embeddings are cached using LMDB for faster subsequent runs. Separate cache directories are maintained for heavy chain structures, light chain structures, and antigen ESM embeddings within the `datasets/fold_emb/` and `antigen_esm/` directories respectively.
+Embeddings are cached using LMDB for efficiency:
+- **Antigen embeddings**: `antigen_esm/` (ESM-2 representations)
+- **Antibody structures**: `datasets/fold_emb/` (IgFold embeddings)
+- **Automatic caching**: First run processes, subsequent runs load from cache
+
+## Troubleshooting
+
+### Common Issues
+1. **Missing CDR/FR regions**: Use `use_existing_splitter.py` to process sequences
+2. **CUDA out of memory**: Reduce `batch_size` or use `--no_cuda`
+3. **Probability > 1 or < 0**: Fixed in latest version with proper sigmoid activation
+4. **Missing dependencies**: Ensure all packages in `requirements.txt` are installed
+
+### GPU Requirements
+- Recommended: NVIDIA GPU with 8GB+ VRAM
+- CPU training supported but slower
+- Mixed precision training for memory efficiency
+
+## Citation
+If you use AntiBinder3 in your research, please cite:
+```
+[Citation information to be added]
+```
+
+## License
+[License information to be added]
