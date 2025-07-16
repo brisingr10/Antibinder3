@@ -65,11 +65,13 @@ class Tester:
                 labels = labels.to(self.device)
 
                 scores = self.model(heavy_chain, light_chain, antigen).squeeze()
-                preds = (scores > 0.5).long()
+                # Convert logits to probabilities using sigmoid
+                probabilities = torch.sigmoid(scores)
+                preds = (probabilities > 0.5).long()
 
                 all_preds.append(preds)
                 all_targets.append(labels)
-                all_scores.append(scores)
+                all_scores.append(probabilities)
                 all_indices.append(indices)
 
         # Concatenate all batch results
@@ -113,7 +115,20 @@ def custom_collate(batch):
         if key not in res: continue
         if isinstance(res[key], dict):
             for sub_key in res[key]:
-                res[key][sub_key] = torch.stack(res[key][sub_key])
+                if sub_key == 'structure':
+                    # Handle variable-length structure embeddings by padding
+                    max_len = max(tensor.shape[0] for tensor in res[key][sub_key])
+                    padded_tensors = []
+                    for tensor in res[key][sub_key]:
+                        if tensor.shape[0] < max_len:
+                            padding = torch.zeros(max_len - tensor.shape[0], tensor.shape[1])
+                            padded_tensor = torch.cat([tensor, padding], dim=0)
+                            padded_tensors.append(padded_tensor)
+                        else:
+                            padded_tensors.append(tensor)
+                    res[key][sub_key] = torch.stack(padded_tensors)
+                else:
+                    res[key][sub_key] = torch.stack(res[key][sub_key])
         else:
             res[key] = torch.stack(res[key]) if isinstance(res[key][0], torch.Tensor) else torch.tensor(res[key])
             

@@ -47,6 +47,7 @@ class antibody_antigen_dataset(nn.Module):
         super().__init__()
         self.antigen_config = antigen_config
         self.antibody_config = antibody_config
+        self.test = test
 
         # --- Load Data ---
         if isinstance(data, pd.DataFrame):
@@ -116,7 +117,12 @@ class antibody_antigen_dataset(nn.Module):
 
     def __getitem__(self, index):
         data_row = self.data.iloc[index]
-        label = torch.tensor(data_row['ANT_Binding'])
+        
+        # Handle labels - use dummy label if in test mode and ANT_Binding column doesn't exist
+        if self.test and 'ANT_Binding' not in self.data.columns:
+            label = torch.tensor(0)  # dummy label for test mode
+        else:
+            label = torch.tensor(data_row['ANT_Binding'])
 
         # --- Antigen Processing ---
         antigen_seq = str(data_row['Antigen Sequence'])
